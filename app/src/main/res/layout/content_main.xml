@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:layout_behavior="@string/appbar_scrolling_view_behavior"
+    tools:showIn="@layout/app_bar_main">
+
+    <TextView
+        android:id="@+id/lmag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="11dp"
+        android:text="|lin|: 0.0000"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/lz"
+        app:layout_constraintTop_toBottomOf="@+id/lz" />
+
+    <TextView
+        android:id="@+id/lz"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="lz: 0.0000"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/ly"
+        app:layout_constraintTop_toBottomOf="@+id/ly" />
+
+    <TextView
+        android:id="@+id/lx"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="42dp"
+        android:text="lx: 0.0000"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/count"
+        app:layout_constraintTop_toBottomOf="@+id/count" />
+
+    <TextView
+        android:id="@+id/ly"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="ly: 0.0000"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/lx"
+        app:layout_constraintTop_toBottomOf="@+id/lx" />
+
+    <TextView
+        android:id="@+id/count"
+        android:layout_width="200dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="51dp"
+        android:text="Steps: 0"
+        android:textAlignment="center"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/wmag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="106dp"
+        android:layout_marginTop="10dp"
+        android:layout_marginEnd="105dp"
+        android:text="|ω|: 0.000 rad/s"
+        android:textSize="14sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="@+id/calibrateBtn"
+        app:layout_constraintTop_toBottomOf="@+id/wz" />
+
+    <TextView
+        android:id="@+id/wx"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:text="wx: 0.000 rad/s"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/wz"
+        app:layout_constraintTop_toTopOf="@+id/gx" />
+
+    <TextView
+        android:id="@+id/wz"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="wz: 0.000 rad/s"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/wmag"
+        app:layout_constraintTop_toBottomOf="@+id/wy" />
+
+    <TextView
+        android:id="@+id/wy"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="wy: 0.000 rad/s"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/wx"
+        app:layout_constraintTop_toBottomOf="@+id/wx" />
+
+    <TextView
+        android:id="@+id/gmag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="|g|: 0.000"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/gz"
+        app:layout_constraintTop_toBottomOf="@+id/gz" />
+
+    <TextView
+        android:id="@+id/gy"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="gy: 0.000"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/gx"
+        app:layout_constraintTop_toBottomOf="@+id/gx" />
+
+    <TextView
+        android:id="@+id/gz"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="9dp"
+        android:text="gz: 0.000"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/gy"
+        app:layout_constraintTop_toBottomOf="@+id/gy" />
+
+    <TextView
+        android:id="@+id/gx"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="45dp"
+        android:text="gx: 0.000"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="@+id/lmag"
+        app:layout_constraintTop_toBottomOf="@+id/lmag" />
+
+    <TextView
+        android:id="@+id/amag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="11dp"
+        android:text="|a|: 0.0000"
+        app:layout_constraintStart_toStartOf="@+id/az"
+        app:layout_constraintTop_toBottomOf="@+id/az" />
+
+    <TextView
+        android:id="@+id/az"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="az: 0.0000"
+        app:layout_constraintStart_toStartOf="@+id/ay"
+        app:layout_constraintTop_toBottomOf="@+id/ay" />
+
+    <TextView
+        android:id="@+id/ax"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="42dp"
+        android:text="ax: 0.0000"
+        app:layout_constraintEnd_toEndOf="@+id/count"
+        app:layout_constraintTop_toBottomOf="@+id/count" />
+
+    <TextView
+        android:id="@+id/ay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="ay: 0.0000"
+        app:layout_constraintStart_toStartOf="@+id/ax"
+        app:layout_constraintTop_toBottomOf="@+id/ax" />
+
+    <TextView
+        android:id="@+id/hzText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="22dp"
+        android:layout_marginBottom="155dp"
+        android:text="Hz"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/calibrateBtn" />
+
+    <Button
+        android:id="@+id/calibrateBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="102dp"
+        android:text="Calibrate"
+        app:layout_constraintBaseline_toBaselineOf="@+id/hzText"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <TextView
+        android:id="@+id/instruction"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="press on calibrate and wait until the calibration ends\n and then walk in order to test the algorithm"
+        app:layout_constraintBottom_toTopOf="@+id/calibrateBtn"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- NEW: Gravity readouts -->
+
+</androidx.constraintlayout.widget.ConstraintLayout>
