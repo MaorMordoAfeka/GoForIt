@@ -1,4 +1,4 @@
-package com.example.goforit
+package com.example.goforitGit
 
 import org.junit.Test
 

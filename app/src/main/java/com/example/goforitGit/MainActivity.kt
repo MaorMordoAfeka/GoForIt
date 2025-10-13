@@ -1,4 +1,4 @@
-package com.example.goforit
+package com.example.goforitGit
 
 import android.app.Activity
 import android.hardware.*
@@ -8,7 +8,7 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.example.goforit.count_step_module.*
+import com.example.goforitGit.count_step_module.*
 import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener, StepListener {
