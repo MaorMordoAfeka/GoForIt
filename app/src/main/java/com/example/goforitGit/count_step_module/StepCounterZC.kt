@@ -4,6 +4,7 @@ import android.util.Log
 import java.util.ArrayDeque as JArrayDeque
 import kotlin.math.abs
 import kotlin.math.acos
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -16,12 +17,16 @@ interface StepListener {
     fun onDebug(d: StepCounterZC.Debug) {}
 }
 
-/** Simple EMA filter. */
-class Ema(private val alpha: Double) {
+/** Simple EMA filter (supports temporary alpha override). */
+class Ema(private var alpha: Double) {
     private var init = false
     private var v = 0.0
     fun update(x: Double): Double {
         v = if (!init) { init = true; x } else (1 - alpha) * v + alpha * x
+        return v
+    }
+    fun updateWithAlpha(x: Double, a: Double): Double {
+        v = if (!init) { init = true; x } else (1 - a) * v + a * x
         return v
     }
     fun value(): Double = v
@@ -64,65 +69,104 @@ data class Sample(
 
 /** Tunables (several auto-tuned in calibrateRest). */
 data class StepCounterZCConfig(
-    // =========================
-    // ZC band & smoothing
-    // =========================
+    // Band multiplier for zero-crossing: ↑ widens band (fewer, cleaner steps), ↓ narrows (more sensitive, risk doubles).
     val cBand: Double = 1.0,
+    // Smoothing for ZC signal EMA: ↑ smoother/laggier, ↓ snappier/more jitter-sensitive.
     val alpha: Double = 0.5,
+    // Axis enum (kept for compatibility); ZC actually uses vertical projection or dominant fallback.
     val axis: Axis = Axis.Y,
 
-    // ==================================
-    // SMA walking gate (per-sample)
-    // ==================================
+    // Multiplier above rest SMA to declare “walking”: ↑ needs stronger motion, ↓ allows gentler gait.
     val smaK: Double = 1.2,
-    val smaWindow: Int = 20,          // ~1 s @ 20 Hz (auto-sized in calibrate)
+    // SMA window length (samples): ↑ steadier gate, ↓ faster but noisier; auto-sized in calibrate.
+    val smaWindow: Int = 20,
 
-    // ========== Debounce ==========
+    // Absolute minimum time between step commits (ms): ↑ blocks fast repeats, ↓ allows higher cadence.
     val minStepIntervalMs: Long = 260,
 
-    // ======================================================
-    // Tilt suppression (rotation-dominant + limited translation)
-    // ======================================================
+    // Gyro magnitude (rad/s) that flags rotation-dominant hand tilts: ↑ less tilt suppression, ↓ more.
     val tiltOmegaThreshRadS: Double = 2.0,
+    // Linear accel cap (m/s²) for tilt suppression path: ↑ tolerates more translation during tilt, ↓ stricter.
     val tiltLinAccelThresh: Double = 7.0,
+    // Rotation/translation ratio needed to call it “tilt”: ↑ requires relatively more rotation, ↓ more permissive.
     val tiltOmegaToLinRatio: Double = 1.4,
-    val tiltHoldMs: Long = 200,              // ↓ shorter hold
+    // How long (ms) tilt stays latched once detected: ↑ longer suppression after a tilt, ↓ shorter.
+    val tiltHoldMs: Long = 200,
+    // Gyro EMA alpha for tilt gate: ↑ faster gyro estimate, ↓ smoother/slower.
     val tiltOmegaEmaAlpha: Double = 0.20,
+    // Linear accel EMA alpha for tilt gate: ↑ faster linear estimate, ↓ smoother/slower.
     val tiltLinEmaAlpha: Double = 0.20,
 
-    // ======================================================
-    // Orientation-change path (gravity direction rotation rate)
-    // ======================================================
+    // Enable alternative tilt path based on gravity direction rotation (helps screen-facing hand carry).
     val tiltUseGDirPath: Boolean = true,
-    val tiltGDirRateThreshRadS: Double = 3.4, // ↑ avoid latching on arm swing
+    // Gravity-direction rotation rate (rad/s) to trigger tilt path: ↑ less sensitive to orientation change, ↓ more.
+    val tiltGDirRateThreshRadS: Double = 3.4,
+    // EMA alpha for gravity-direction rate: ↑ faster response, ↓ steadier reading.
     val tiltGDirEmaAlpha: Double = 0.30,
 
-    // Quiet period after walking starts before tilt can suppress
-    val tiltQuietStartMs: Long = 800,        // new
+    // Quiet time after walking starts where tilt cannot suppress (ms): ↑ fewer early misses, ↓ more responsive to tilts.
+    val tiltQuietStartMs: Long = 800,
 
-    // =================================================================
-    // Optional "shake" path
-    // =================================================================
+    // Optional “shake” path (false by default) that treats strong translation with low rotation as non-tilt.
     val tiltShakeUse: Boolean = false,
+    // Max gyro (rad/s) to consider motion a “shake” not a tilt: ↑ classifies more as shake, ↓ stricter.
     val tiltShakeOmegaMax: Double = 0.8,
+    // Min linear accel (m/s²) to consider motion a “shake”: ↑ demands stronger translation, ↓ more permissive.
     val tiltShakeLinMin: Double = 6.5,
 
-    // ============================ Walking-likeness gates ============================
-    val vertRmsRatioMin: Double = 1.0,       // ↓ more tolerant for hand-carry
+    // Vertical/horizontal RMS ratio floor to prefer vertical projection: ↑ prefer vertical more, ↓ switch to dominant sooner.
+    val vertRmsRatioMin: Double = 1.0,
+    // Gate: minimum cadence (Hz) to accept from ZC cadence estimator: ↑ ignore slower walks, ↓ accept shuffles.
     val cadenceMinHz: Double = 0.25,
+    // Gate: maximum cadence (Hz) to accept from ZC cadence estimator: ↑ allow very fast steps, ↓ cap high-cadence.
     val cadenceMaxHz: Double = 3.1,
-    val cadenceCvMax: Double = 3.4,         // ↑ a bit looser
+    // Gate: maximum CV of cadence intervals (dimensionless): ↑ tolerate irregular rhythm, ↓ require steady tempo.
+    val cadenceCvMax: Double = 3.4,
 
-    // ============================ Robust ZC (band crossing) ============================
+    // Time (ms) to require back “in band” before re-arming after a step: ↑ fewer doubles, ↓ faster re-arm.
     val bandRearmMs: Long = 120,
-    val outMinConsec: Int = 2,               // ↓ confirm sooner
-    val outOvershoot: Double = 1.08,         // ↓ easier exits
-    val minSlopeAbs: Double = 2.2            // ↓ easier exits; scaled when dominant-axis
+    // Minimum consecutive out-of-band samples to treat as true cross: ↑ harder to trigger, ↓ easier.
+    val outMinConsec: Int = 2,
+    // Overshoot multiplier beyond band before commit: ↑ stricter peak needed, ↓ more eager commits.
+    val outOvershoot: Double = 1.08,
+    // Minimum slope magnitude (units/s) around cross: ↑ demands sharper rise/fall, ↓ accepts softer steps.
+    val minSlopeAbs: Double = 2.2,
+
+    // Enable dominant-axis fallback when vertical is weak (hand-carry help).
+    val dominantFallbackEnabled: Boolean = true,
+    // Upper clamp (ms) for in-band dwell re-arm on vertical path: ↑ fewer doubles, ↓ more responsive.
+    val rearmDwellMsBase: Long = 150,
+    // Upper clamp (ms) for in-band dwell re-arm on dominant path: ↑ fewer doubles in hand-carry, ↓ more responsive.
+    val rearmDwellMsBaseDominant: Long = 180,
+    // Overshoot factor used in dominant-axis mode (stricter than vertical): ↑ fewer false hand-swings, ↓ count more.
+    val outOvershootDominant: Double = 1.32,
+    // Extra slope demand multiplier in dominant mode: ↑ require snappier peaks, ↓ accept gentler arm arcs.
+    val slopeDominantMult: Double = 1.3,
+    // Floor on band half-width in dominant mode: ↑ prevents tiny bands (misses soft steps), ↓ allows tighter target.
+    val bandMinDominant: Double = 0.10,
+
+    // Hard cap on vertical band half-width: ↑ allow broader band if rest is noisy, ↓ limit overshoot requirements.
+    val bandMaxVertical: Double = 0.18,
+    // Hard cap on dominant band half-width: ↑ allow broader band in hand-carry, ↓ limit overshoot requirements.
+    val bandMaxDominant: Double = 0.30
 )
+
+
 
 /**
  * Advanced ZC step counter with dominant-axis fallback for hand-carry.
- **/
+ *
+ * Adds:
+ * - OR-based rearm (opp-side OR in-band dwell)
+ * - Dual-phase counting (alternate up & down)
+ * - Relaxed cross precondition (sign-aware, not strict ≤ −band)
+ * - Walk-mode DC recentring (faster EMA while walking)
+ * - More responsive dominant tracking
+ * - Overshoot/peak latch (commit on overshoot or local peak)
+ * - Pre-walk grace, robust calibration, band caps
+ * - Cadence-backed walking gate (no dependence on SMA only)
+ * - Duplicate-calibration guard
+ */
 class StepCounterZC(
     private var cfg: StepCounterZCConfig = StepCounterZCConfig(),
     private val listener: StepListener? = null
@@ -130,9 +174,10 @@ class StepCounterZC(
     // Dominant-axis (unit) with hemisphere lock
     private var dUx = 1.0; private var dUy = 0.0; private var dUz = 0.0
     private var haveDom = false
-    private val domAlphaInBand = 0.05   // update only while in-band (~1 s @20 Hz)
+    // EMA blend for updating the dominant motion direction while “in band”: ↑ tracks arm swings faster, ↓ more stable.
+    private val domAlphaInBand = 0.08
 
-    // DC remover for zcSignal (very slow EMA)
+    // DC remover for zcSignal (slow at rest, faster when walking)
     private var dcEma = Ema(0.02)
 
     // ---- Calibration (rest stats) ----
@@ -140,6 +185,7 @@ class StepCounterZC(
     var sdRestSMA: Double = 0.0; private set
     var stdRestAxis: Double = 0.0; private set
     var calibrated: Boolean = false; private set
+    private var lastCalibMs: Long = -1
 
     // ---- Windows ----
     private var smaWin = RollingWindow(cfg.smaWindow)
@@ -148,50 +194,68 @@ class StepCounterZC(
 
     // ---- Filters ----
     private var axisEma = Ema(cfg.alpha)                 // ZC signal (vertical or dominant)
+    private var axisEmaFast = Ema(0.65)                  // snappier EMA for hand swings
     private var omegaEma = Ema(cfg.tiltOmegaEmaAlpha)
     private var linEma = Ema(cfg.tiltLinEmaAlpha)
     private var gDirEma = Ema(cfg.tiltGDirEmaAlpha)
 
     // ---- State ----
     private var lastTiltMs: Long = -1
-    private var lastNonZeroSide: Int = 0
     private var inBand: Boolean = true
+    private var inBandSinceMs: Long = -1
     private var lastCountedMs: Long = -1
 
-    // Prev gravity direction for orientation-change rate
+    // For orientation-change rate
     private var hasPrevU = false
     private var prevUnitGravitationVectorX = 0.0
     private var prevUnitGravitationVectorY = 0.0
     private var prevUnitGravitationVectorZ = 0.0
     private var prevUTsNs: Long = 0L
 
-    // Dominant-motion direction (EMA) for fallback when verticalDominant=false
+    // Dominant-motion direction (EMA)
     private var domX = 0.0; private var domY = 0.0; private var domZ = 0.0
-    private val domAlpha = 0.05  // ~1 s memory at ~20 Hz
 
     // Robust ZC state
-    private var inBandSinceMs: Long = -1
-    private var outsideSinceMs: Long = -1
-    private var outsideConsec: Int = 0
     private var prevSmoothAxis = 0.0
     private var prevSmoothTsMs: Long = -1
 
-    // Recent ZC times for cadence estimation
+    // Rearm/hysteresis state
+    private var requireOppSide: Boolean = false
+    private var visitedOppSideSinceCount: Boolean = false
+    private var bandDwellOkSinceCount: Boolean = false
+    private var sumInBandSinceCountMs: Double = 0.0
+    private var lastCommitUp: Int = 0 // +1=up, -1=down, 0=none yet
+
+    // **Overshoot/peak latch**
+    private var pendingCross: Boolean = false
+    private var pendingStartMs: Long = -1
+    private var pendingBand: Double = 0.0
+    private var pendingOvershootFactor: Double = 1.0
+    private var pendingUseDominant: Boolean = false
+    private var pendingPrevSlopeSign: Int = 1
+    private var pendingForUp: Boolean = true
+    private var pendingExt: Double = 0.0 // max for up, min for down
+
+    // ZC times for cadence estimation (count-phase only)
     private val zcTimesMs: JArrayDeque<Long> = JArrayDeque(16)
 
-    // snappier EMA for small hand swings
-    private var axisEmaFast = Ema(0.65)
-
-    // min ZC spacing so two flips won't be recorded a few ms apart
+    // Minimum spacing for logging ZC pulses
     private var lastZcMs: Long = -1
-    private val minZcIntervalMs = 240L   // ~ >2.1 Hz half-cycle guard (safer)
+    // Min spacing (ms) between logged ZC pulses for cadence estimation: ↑ fewer cadence points, ↓ denser cadence tracking.
+    private val minZcIntervalMs = 200L
 
-    // Only count on one oscillation phase
     private val countPositivePhase = true
 
-    // Track walking transition for tilt quiet start
+    // Walking transition for tilt quiet start
     private var prevWalkingNow = false
     private var lastWalkingTrueMs: Long = -1
+
+    // ---- Pre-walk grace after stillness ----
+    private var stillSinceMs: Long = -1
+    private var preWalkGraceUntilMs: Long = -1
+
+    // ---- Dual-phase expectation ----
+    private var expectUp: Int = 0 // 0=any, +1=upward, -1=downward
 
     var totalSteps: Int = 0; private set
 
@@ -210,6 +274,13 @@ class StepCounterZC(
         val gDirRate: Double
     )
 
+    private fun recentZcCount(windowMs: Long): Int {
+        val now = prevSmoothTsMs
+        var c = 0
+        for (t in zcTimesMs) if (now - t <= windowMs) c++
+        return c
+    }
+
     fun addSample(sm: Sample) {
         val nowMs = sm.timestampNs / 1_000_000L
 
@@ -219,6 +290,11 @@ class StepCounterZC(
         val lz = (sm.az - sm.gz).toDouble()
         val linMagRaw = sqrt(lx * lx + ly * ly + lz * lz)
         val omegaMagRaw = sqrt((sm.wx * sm.wx + sm.wy * sm.wy + sm.wz * sm.wz).toDouble())
+
+        // normalized linear direction (for dominant tracking update later)
+        val lNorm = linMagRaw
+        var nx = 0.0; var ny = 0.0; var nz = 0.0
+        if (lNorm > 1e-6) { nx = lx / lNorm; ny = ly / lNorm; nz = lz / lNorm }
 
         // ---- SMA Average (L1 of linear accel) ----
         val smaPoint = abs(lx) + abs(ly) + abs(lz)
@@ -244,8 +320,6 @@ class StepCounterZC(
         val hRms = sqrt(horizEWin.sum / max(1, horizEWin.size()).toDouble())
         val vertRatio = vRms / (hRms + 1e-9)
         val verticalDominant = vertRatio >= cfg.vertRmsRatioMin
-        val nearVerticalLocal = vertRatio >= (cfg.vertRmsRatioMin * 0.75) // ↓ looser warmup
-        var nearVertical = nearVerticalLocal
 
         // ---- Tilt gate signals (EMAs) ----
         val omega = omegaEma.update(omegaMagRaw)
@@ -266,7 +340,6 @@ class StepCounterZC(
 
         // ----- Tilt logic -----
         val ratioOK = omega / (lin + 1e-9) >= cfg.tiltOmegaToLinRatio
-
         val tiltRaw1 = (omega >= cfg.tiltOmegaThreshRadS) && (lin <= cfg.tiltLinAccelThresh) && ratioOK
         val tiltRaw2 = cfg.tiltUseGDirPath && (gDirRate >= cfg.tiltGDirRateThreshRadS) && (lin <= 6.0) && !verticalDominant
         val shakeRaw = cfg.tiltShakeUse && (omega <= cfg.tiltShakeOmegaMax) && (lin >= cfg.tiltShakeLinMin) && !verticalDominant
@@ -275,10 +348,16 @@ class StepCounterZC(
         if (tiltRaw) lastTiltMs = nowMs
         val isHandTiltedLatched = (nowMs - lastTiltMs) <= cfg.tiltHoldMs
 
-        // ---- Walking gate (avg SMA above rest) ----
-        val threshAvgSma = muRestSMA + cfg.smaK * sdRestSMA
-        val enoughSamples = filled >= min(cfg.smaWindow, 12) // ≈ 0.3–0.6 s
+        // ---- Walking gate (avg SMA above rest), with hand-carry relax ----
+        val kEff = if (cfg.dominantFallbackEnabled && !verticalDominant) cfg.smaK * 0.7 else cfg.smaK // was 0.8
+        val threshAvgSma = muRestSMA + kEff * sdRestSMA
+        val enoughSamples = filled >= min(cfg.smaWindow, 12)
         val walkingNow = calibrated && sdRestSMA > 0.0 && enoughSamples && (avgSma > threshAvgSma)
+
+        // Track stillness to trigger pre-walk grace
+        val inStillness = calibrated && enoughSamples && (avgSma <= threshAvgSma)
+        if (inStillness) { if (stillSinceMs < 0) stillSinceMs = nowMs } else stillSinceMs = -1
+        val preWalkGraceActive = (preWalkGraceUntilMs >= 0) && (nowMs <= preWalkGraceUntilMs)
 
         // Walking transition (for tilt quiet start)
         val justBecameWalking = walkingNow && !prevWalkingNow
@@ -296,177 +375,288 @@ class StepCounterZC(
             sdRestSMA = sqrt(varNew)
         }
 
-        // ---- Dominant-axis fallback for ZC signal ----
-        val lNorm = sqrt(lx * lx + ly * ly + lz * lz)
-        if (lNorm > 1e-6 && inBand && inBandSinceMs >= 0 && (nowMs - inBandSinceMs) >= cfg.bandRearmMs) {
-            // hemisphere-locked EMA update of dUx/dUy/dUz
-            var nx = lx / lNorm; var ny = ly / lNorm; var nz = lz / lNorm
-            val dotH = nx * dUx + ny * dUy + nz * dUz
-            val s = if (!haveDom || dotH >= 0.0) 1.0 else -1.0
-            nx *= s; ny *= s; nz *= s
+        // ---- Choose projection for ZC: vertical by default; dominant-axis if vertical is weak (and enabled)
+        val useDominant = cfg.dominantFallbackEnabled && !verticalDominant && haveDom
+        val zcRaw = if (!useDominant) (aVert) else (lx * dUx + ly * dUy + lz * dUz)
 
-            dUx = (1 - domAlphaInBand) * dUx + domAlphaInBand * nx
-            dUy = (1 - domAlphaInBand) * dUy + domAlphaInBand * ny
-            dUz = (1 - domAlphaInBand) * dUz + domAlphaInBand * nz
-            val dn = sqrt(dUx * dUx + dUy * dUy + dUz * dUz)
-            if (dn > 1e-6) { dUx /= dn; dUy /= dn; dUz /= dn; haveDom = true }
-        }
-
-        // Choose projection for ZC: vertical by default; dominant-axis if vertical is weak
-        val useDominant = !verticalDominant && haveDom
-        val zcRaw = if (!useDominant) aVert else (lx * dUx + ly * dUy + lz * dUz)
-
-        // Remove slow DC so we actually cross zero
-        val zcBias = dcEma.update(zcRaw)
+        // Walk-mode DC recentring
+        val dcAlpha = if (walkingNow) 0.06 else 0.02
+        val zcBias = dcEma.updateWithAlpha(zcRaw, dcAlpha)
         val zcSignal = zcRaw - zcBias
-
-        // Slightly wider band only in fallback
-        val bandScale = if (!useDominant) 1.0 else 1.2
 
         // ---- ZC signal smoothing ----
         val smoothAxis = if (useDominant) axisEmaFast.update(zcSignal) else axisEma.update(zcSignal)
 
-        // Cap the band: ↓ min to avoid swallowing small hand swings
-        val band = (cfg.cBand * stdRestAxis * bandScale).coerceIn(0.10, 1.0)
+        // Effective band with floors **and caps** (slightly wider band only in fallback)
+        val bandScale = if (!useDominant) 1.0 else 1.05
+        val bandFloor = if (useDominant) cfg.bandMinDominant else 0.10
+        val bandMax = if (useDominant) cfg.bandMaxDominant else cfg.bandMaxVertical
+        val bandRaw = cfg.cBand * stdRestAxis * bandScale
+        val band = bandRaw.coerceIn(bandFloor, bandMax)
 
-        // Track slope for "fast enough" exits (m/s^2 per s)
-        var dSmoothDtAbs = 0.0
-        if (prevSmoothTsMs > 0) {
-            val dtSec = (nowMs - prevSmoothTsMs) / 1000.0
-            if (dtSec > 1e-6) dSmoothDtAbs = abs((smoothAxis - prevSmoothAxis) / dtSec)
+        // Update dominant direction AFTER we have band/smoothAxis; allow near-band updates (≤1.5×band)
+        if (lNorm > 1e-6) {
+            val absVal = abs(smoothAxis)
+            val zcBurstForDom = recentZcCount(2200) // allow update sooner once ZCs start coming
+            val canUpdateDom = absVal <= (1.5 * band) || (inBand && inBandSinceMs >= 0 && (nowMs - inBandSinceMs) >= cfg.bandRearmMs) || (zcBurstForDom >= 2)
+            if (canUpdateDom) {
+                // hemisphere lock w.r.t current dominant
+                val dotH = nx * dUx + ny * dUy + nz * dUz
+                val s = if (!haveDom || dotH >= 0.0) 1.0 else -1.0
+                val nxh = nx * s; val nyh = ny * s; val nzh = nz * s
+                dUx = (1 - domAlphaInBand) * dUx + domAlphaInBand * nxh
+                dUy = (1 - domAlphaInBand) * dUy + domAlphaInBand * nyh
+                dUz = (1 - domAlphaInBand) * dUz + domAlphaInBand * nzh
+                val dn = sqrt(dUx * dUx + dUy * dUy + dUz * dUz)
+                if (dn > 1e-6) { dUx /= dn; dUy /= dn; dUz /= dn; haveDom = true }
+            }
         }
-        prevSmoothAxis = smoothAxis
-        prevSmoothTsMs = nowMs
 
-        // ---- Robust ZC with re-arm, overshoot, multi-sample confirm ----
-        var counted = 0
+        // Track slope (signed and abs)
+        var dSmoothDtAbs = 0.0
+        var dSmoothDt = 0.0
+        var dtMs = 0.0
+        if (prevSmoothTsMs > 0) {
+            dtMs = (nowMs - prevSmoothTsMs).toDouble()
+            val dtSec = dtMs / 1000.0
+            if (dtSec > 1e-6) {
+                dSmoothDt = (smoothAxis - prevSmoothAxis) / dtSec
+                dSmoothDtAbs = abs(dSmoothDt)
+            }
+        }
+
+        // Update band/in-band timers and accumulate in-band time since last count
         val absVal = abs(smoothAxis)
-        var cadenceHz = 0.0
-        var lastComputedCv = Double.NaN
-        var cadenceWarmup = false
-
         if (absVal <= band) {
             if (!inBand) {
                 inBand = true
                 inBandSinceMs = nowMs
-                outsideConsec = 0
             } else if (inBandSinceMs < 0) {
                 inBandSinceMs = nowMs
             }
+            if (lastCountedMs >= 0 && dtMs > 0.0) {
+                sumInBandSinceCountMs += dtMs
+            }
         } else {
-            val side = if (smoothAxis > 0) +1 else -1
             if (inBand) {
                 inBand = false
-                outsideSinceMs = nowMs
-                outsideConsec = 1
-            } else {
-                outsideConsec += 1
+                inBandSinceMs = -1
             }
+        }
 
-            val overshootOk = absVal >= cfg.outOvershoot * band
-            val dwellOk = (inBandSinceMs >= 0) && ((nowMs - inBandSinceMs) >= cfg.bandRearmMs)
-            val minSlopeEff = if (useDominant) cfg.minSlopeAbs * 0.6 else cfg.minSlopeAbs
-            val slopeOk = dSmoothDtAbs >= minSlopeEff
-            val signChanged = (lastNonZeroSide != 0) && (side != lastNonZeroSide)
+        // === Adaptive dwell time based on cadence limit ===
+        val periodFromCadenceMaxMs = 1000.0 / cfg.cadenceMaxHz
+        val dwellTargetMsBase = if (useDominant) 0.22 else 0.18
+        val dwellClampMin = if (useDominant) 60.0 else 40.0
+        val dwellClampMax = if (useDominant) min(cfg.rearmDwellMsBaseDominant.toDouble(), 140.0) else min(cfg.rearmDwellMsBase.toDouble(), 120.0)
+        val dwellMsEff = (periodFromCadenceMaxMs * dwellTargetMsBase).coerceIn(dwellClampMin, dwellClampMax)
 
-            val robustFlip = dwellOk && overshootOk && (outsideConsec >= cfg.outMinConsec) && slopeOk && signChanged
+        if (sumInBandSinceCountMs >= dwellMsEff) bandDwellOkSinceCount = true
 
-            if (robustFlip) {
-                // Determine which side we flipped into after smoothing
-                val flipSide = if (smoothAxis > 0) +1 else -1
-                val isCountPhase = if (countPositivePhase) (flipSide > 0) else (flipSide < 0)
+        // Opposite-side visit since last commit (phase-aware)
+        if (requireOppSide) {
+            val oppVisitedNow = when (lastCommitUp) {
+                +1 -> smoothAxis <= -band
+                -1 -> smoothAxis >=  band
+                else -> (smoothAxis <= -band || smoothAxis >= band)
+            }
+            if (oppVisitedNow) visitedOppSideSinceCount = true
+        }
 
-                // ---- cadence tracking ----
-                if (isCountPhase) {
-                    val acceptZc = isCountPhase &&
-                            ((lastZcMs < 0) || (nowMs - lastZcMs >= minZcIntervalMs)) &&
-                            ((lastCountedMs < 0) || (nowMs - lastCountedMs >= cfg.minStepIntervalMs))
-                    if (acceptZc) {
-                        lastZcMs = nowMs
-                        zcTimesMs.addLast(nowMs)
-                        while (zcTimesMs.size > 16) zcTimesMs.removeFirst()
-                    }
-                }
+        // === Phase detection (dual) ===
+        val upCross   = (prevSmoothAxis < 0 && smoothAxis >= band)
+        val downCross = (prevSmoothAxis > 0 && smoothAxis <= -band)
+        val phaseCross = when (expectUp) {
+            +1 -> upCross
+            -1 -> downCross
+            else -> (upCross || downCross)
+        }
+        val wantUp = when (expectUp) {
+            +1 -> true
+            -1 -> false
+            else -> if (upCross) true else if (downCross) false else true
+        }
 
-                // Intervals between consecutive count-phase flips are **step** intervals
-                val times = zcTimesMs.toList()
-                var stepIntervals = if (times.size >= 2) times.takeLast(9).zipWithNext().map { (a,b)-> (b-a).toDouble() } else emptyList()
-                // Optionally drop max/min before mean/SD:
-                stepIntervals = if (stepIntervals.size >= 5) stepIntervals.sorted().drop(1).dropLast(1) else stepIntervals
+        // Effective gates
+        val outOvershootEff = if (useDominant) max(cfg.outOvershootDominant, cfg.outOvershoot) else cfg.outOvershoot
+        val minSlopeEff = if (useDominant) cfg.minSlopeAbs * cfg.slopeDominantMult else cfg.minSlopeAbs
+        val slopeOk = dSmoothDtAbs >= minSlopeEff
 
-                val have3 = stepIntervals.size >= 3
-                val have5 = stepIntervals.size >= 5
+        // === Coherent min step interval ===
+        val minFromCadence = ceil(1000.0 / (cfg.cadenceMaxHz * 1.25)).toLong() // was 1.10 → allow fast steps ~258ms
+        val minStepIntervalEff = max(cfg.minStepIntervalMs, minFromCadence)
+        val okInterval = (lastCountedMs < 0) || (nowMs - lastCountedMs >= minStepIntervalEff)
 
-                val cadenceOk =
-                    if (!have3) {
-                        cadenceWarmup = true
-                        true // let cadence boot up
-                    } else {
-                        val mean = stepIntervals.average()
-                        val sd = if (stepIntervals.size >= 2)
-                            kotlin.math.sqrt(stepIntervals.map { (it - mean) * (it - mean) }.average())
-                        else 0.0
-                        val cv = if (mean > 1.0) sd / mean else 1.0
-                        lastComputedCv = cv
-                        cadenceHz = if (mean > 1.0) 1000.0 / mean else 0.0
+        // ---- cadence estimation: record at either phase cross ----
+        var cadenceHz = 0.0
+        var lastComputedCv = Double.NaN
+        var cadenceWarmup = false
+        if (phaseCross && slopeOk && okInterval) {
+            if ((lastZcMs < 0) || (nowMs - lastZcMs >= minZcIntervalMs)) {
+                lastZcMs = nowMs
+                zcTimesMs.addLast(nowMs)
+                while (zcTimesMs.size > 16) zcTimesMs.removeFirst()
+            }
+        }
+        val times = zcTimesMs.toList()
+        var stepIntervals = if (times.size >= 2) times.takeLast(9).zipWithNext().map { (a,b)-> (b-a).toDouble() } else emptyList()
+        stepIntervals = if (stepIntervals.size >= 5) stepIntervals.sorted().drop(1).dropLast(1) else stepIntervals
+        val have3 = stepIntervals.size >= 3
+        val have5 = stepIntervals.size >= 5
+        val cadenceOk = if (!have3) {
+            cadenceWarmup = true
+            true
+        } else {
+            val mean = stepIntervals.average()
+            val sd = if (stepIntervals.size >= 2) kotlin.math.sqrt(stepIntervals.map { (it - mean) * (it - mean) }.average()) else 0.0
+            val cv = if (mean > 1.0) sd / mean else 1.0
+            lastComputedCv = cv
+            cadenceHz = if (mean > 1.0) 1000.0 / mean else 0.0
+            val cadenceMinEff = cfg.cadenceMinHz
+            val cadenceMaxEff = if (!have5) cfg.cadenceMaxHz * 1.15 else cfg.cadenceMaxHz
+            (cadenceHz in cadenceMinEff..cadenceMaxEff) && (if (have5) cv <= cfg.cadenceCvMax else true)
+        }
 
-                        val cadenceMinEff = if (!have5) 0.34 else cfg.cadenceMinHz
-                        val cadenceMaxEff = if (!have5) cfg.cadenceMaxHz * 1.15 else cfg.cadenceMaxHz
+        val nearVertical = vertRatio >= (cfg.vertRmsRatioMin * 0.75)
+        val handCarryRelax = cadenceOk && nearVertical
 
-                        if (!have5) {
-                            cadenceWarmup = true
-                            (cadenceHz in cadenceMinEff..cadenceMaxEff)
-                        } else {
-                            val cvCap = cfg.cadenceCvMax
-                            (cadenceHz in cadenceMinEff..cadenceMaxEff) && (cv <= cvCap)
-                        }
-                    }
+        // **Pre-walk grace**: allow arming after ≥3 s stillness
+        if (!preWalkGraceActive && inStillness && stillSinceMs >= 0 && (nowMs - stillSinceMs) >= 3000 && phaseCross && slopeOk) {
+            preWalkGraceUntilMs = nowMs + 1200
+            Log.i("DEBUGAPP", "prewalk: grace armed for 1200ms after stillness")
+        }
+        // cadence-backed walking gate — easier to arm early
+        val zcBurst = recentZcCount(2200)            // was 1600ms
+        val walkingFromZc = cadenceOk || zcBurst >= 2 // was >=3
+        val gateWalkingArm = if (calibrated) (walkingNow || preWalkGraceActive || walkingFromZc) else true
 
-                // allow near-vertical (slightly easier for hand-carry)
-                nearVertical = vertRatio >= (cfg.vertRmsRatioMin * 0.75)
-                val handCarryRelax = cadenceOk && nearVertical
+        val gateDominance = verticalDominant || handCarryRelax || useDominant
+        val gateNotTilted = !isHandTilted || walkingFromZc
 
-                val okInterval = (lastCountedMs < 0) || (nowMs - lastCountedMs >= cfg.minStepIntervalMs)
+        val dwellOk = (lastCountedMs < 0) || bandDwellOkSinceCount || visitedOppSideSinceCount
+        // OR-based rearm: opp-side OR in-band dwell (plus legacy flags)
+        val oppOk = (lastCountedMs < 0) || !requireOppSide || visitedOppSideSinceCount || bandDwellOkSinceCount
 
-                // If we are already using the dominant-axis projection, treat that as "dominant enough".
-                val gateWalking = if (calibrated) walkingNow else true
-                val gateDominance = verticalDominant || handCarryRelax || useDominant
-                val gateNotTilted = !isHandTilted || cadenceOk
-                val gateInterval = okInterval
-                val gateCadence = cadenceOk
+        // ================= Overshoot/peak latch logic =================
+        val overshootThreshold = outOvershootEff * band
 
-                var culprit: String? = null
-                if (!gateWalking) {
-                    val phase = if (calibrated) "calibrated" else "precal"
-                    culprit = "walkingNow=false (phase=$phase, avgSma=$avgSma, thresh=$threshAvgSma)"
-                }
-                if (culprit == null && !gateDominance) culprit =
-                    "dominance=false (vertRatio=$vertRatio, handCarryRelax=$handCarryRelax)"
-                if (culprit == null && !gateNotTilted) culprit = "isHandTilted=true"
-                if (culprit == null && !gateInterval) {
-                    val since = if (lastCountedMs >= 0) (nowMs - lastCountedMs) else -1
-                    culprit = "okInterval=false (Δt=${since}ms < min=${cfg.minStepIntervalMs}ms)"
-                }
-                if (culprit == null && !gateCadence) {
-                    val cvTxt = if (lastComputedCv.isNaN()) "n/a" else "%.2f".format(lastComputedCv)
-                    val phase = if (cadenceWarmup) "warmup" else "steady"
-                    culprit = "cadenceOk=false (cadenceHz=%.3f, cv=$cvTxt, phase=$phase)".format(cadenceHz)
-                }
+        // Arm when everything except overshoot is satisfied at the phase cross
+        val canArm = phaseCross && slopeOk && okInterval && gateWalkingArm && oppOk && dwellOk && gateDominance && gateNotTilted
+        if (canArm && !pendingCross) {
+            pendingCross = true
+            pendingStartMs = nowMs
+            pendingBand = band
+            pendingOvershootFactor = outOvershootEff
+            pendingUseDominant = useDominant
+            pendingForUp = wantUp
+            pendingPrevSlopeSign = if (dSmoothDt >= 0.0) 1 else -1
+            pendingExt = smoothAxis
+            Log.i(
+                "DEBUGAPP",
+                "STEP pending: waiting overshoot (need >= ${"%.2f".format(overshootThreshold)}; band=${"%.2f".format(band)} factor=${"%.2f".format(outOvershootEff)})"
+            )
+        }
 
-                if (culprit == null && isCountPhase) {
-                    counted = 1
+        // If armed, track extremum and commit on overshoot OR local-peak, with a cadence-aware timeout
+        if (pendingCross) {
+            // Dynamic window from cadence (dominant gets a bit longer)
+            val estPeriodMs = when {
+                stepIntervals.isNotEmpty() -> stepIntervals.average()
+                cadenceHz > 0.0 -> 1000.0 / cadenceHz
+                else -> 1000.0 / cfg.cadenceMaxHz
+            }
+            val windowMs = if (pendingUseDominant)
+                (0.38 * estPeriodMs).coerceIn(130.0, 220.0)
+            else
+                (0.30 * estPeriodMs).coerceIn(110.0, 180.0)
+
+            val elapsed = (nowMs - pendingStartMs).toDouble()
+
+            // Track running extremum while slope is in the same direction; detect local max/min when slope flips
+            val slopeSign = if (dSmoothDt >= 0.0) 1 else -1
+            if (pendingForUp) {
+                if (smoothAxis > pendingExt) pendingExt = smoothAxis
+            } else {
+                if (smoothAxis < pendingExt) pendingExt = smoothAxis
+            }
+            val peakFactor = if (pendingUseDominant) 1.15 else 1.05 // was 1.22 on dominant
+            val reachedOvershoot = if (pendingForUp) (smoothAxis >= (pendingOvershootFactor * pendingBand))
+            else             (smoothAxis <= -(pendingOvershootFactor * pendingBand))
+            val reachedPeak = if (pendingForUp)
+                (pendingPrevSlopeSign > 0 && slopeSign < 0 && pendingExt >=  (peakFactor * pendingBand))
+            else
+                (pendingPrevSlopeSign < 0 && slopeSign > 0 && pendingExt <= -(peakFactor * pendingBand))
+
+            val timedOut = elapsed > windowMs
+            val reversed = if (pendingForUp) (smoothAxis <= -pendingBand) else (smoothAxis >= pendingBand)
+
+            if (reachedOvershoot || reachedPeak) {
+                val okIntervalNow = (lastCountedMs < 0) || (nowMs - lastCountedMs >= minStepIntervalEff)
+                if (okIntervalNow && gateWalkingArm && gateDominance && gateNotTilted) {
                     totalSteps += 1
                     lastCountedMs = nowMs
-                } else if (culprit != null) {
+
+                    requireOppSide = true
+                    visitedOppSideSinceCount = false
+                    bandDwellOkSinceCount = false
+                    sumInBandSinceCountMs = 0.0
+
+                    // End pre-walk grace and start tilt quiet period
+                    preWalkGraceUntilMs = -1
+                    lastWalkingTrueMs = nowMs
+
+                    // Remember last commit phase and alternate expectation
+                    lastCommitUp = if (pendingForUp) +1 else -1
+                    expectUp = if (expectUp == 0) -lastCommitUp else -expectUp
+
                     Log.i(
                         "DEBUGAPP",
-                        "STEP blocked: $culprit | dwellOk=$dwellOk overshootOk=$overshootOk " +
-                                "outsideConsec=$outsideConsec slopeOk=$slopeOk signChanged=$signChanged useDominant=$useDominant"
+                        "STEP commit: method=${if (reachedOvershoot) "overshoot" else "peak"} peak=${"%.2f".format(pendingExt)} band=${"%.2f".format(pendingBand)} window=${"%.0f".format(windowMs)}ms"
+                    )
+
+                    pendingCross = false
+                    listener?.onSteps(0, totalSteps)
+                } else {
+                    if (timedOut || reversed) pendingCross = false
+                }
+            } else if (timedOut || reversed) {
+                pendingCross = false
+            }
+            pendingPrevSlopeSign = slopeSign
+        }
+
+        // Debug logging when we *block* a potential step at the moment of the cross (not already pending)
+        if (phaseCross && !pendingCross) {
+            var culprit: String? = null
+            val overshootOkNow = if (wantUp) (smoothAxis >= overshootThreshold) else (smoothAxis <= -overshootThreshold)
+            if (!canArm && !overshootOkNow) {
+                if (!gateWalkingArm) {
+                    val phaseTxt = if (calibrated) "calibrated" else "precal"
+                    val zcBurst = recentZcCount(2200)
+                    culprit = "walkingNow=false (phase=$phaseTxt, avgSma=$avgSma, thresh=$threshAvgSma, zcBurst=$zcBurst, cadenceOk=$cadenceOk)"
+                }
+                if (culprit == null && !gateDominance) culprit = "dominance=false (vertRatio=$vertRatio, handCarryRelax=$handCarryRelax)"
+                if (culprit == null && !gateNotTilted) culprit = "isHandTilted=true"
+                if (culprit == null && !dwellOk) culprit = "rearm_dwell=false (inBand=${"%.0f".format(sumInBandSinceCountMs)}ms)"
+                if (culprit == null && !oppOk) culprit = "rearm_opp=false"
+                if (culprit == null && !slopeOk) culprit = "slopeOk=false"
+                if (culprit == null && !okInterval) {
+                    val since = if (lastCountedMs >= 0) (nowMs - lastCountedMs) else -1
+                    culprit = "okInterval=false (Δt=${since}ms < min=${minStepIntervalEff}ms)"
+                }
+                if (culprit == null && !cadenceOk) {
+                    val cvTxt = if (lastComputedCv.isNaN()) "n/a" else "%.2f".format(lastComputedCv)
+                    val phaseTxt = if (cadenceWarmup) "warmup" else "steady"
+                    culprit = "cadenceOk=false (cadenceHz=%.3f, cv=$cvTxt, phase=$phaseTxt)".format(cadenceHz)
+                }
+                if (culprit != null) {
+                    Log.i(
+                        "DEBUGAPP",
+                        "STEP blocked: $culprit | dwellOk=$dwellOk overshootOk=${overshootOkNow} " +
+                                "slopeOk=$slopeOk useDominant=$useDominant visitedOpp=$visitedOppSideSinceCount bandDwellOk=$bandDwellOkSinceCount"
                     )
                 }
             }
-
-            lastNonZeroSide = side
         }
 
         listener?.onDebug(
@@ -485,15 +675,23 @@ class StepCounterZC(
                 gDirRate = gDirRate
             )
         )
-        if (counted != 0) listener?.onSteps(counted, totalSteps)
 
-        // update walking transition state
+        // update previous states
+        prevSmoothAxis = smoothAxis
+        prevSmoothTsMs = nowMs
         prevWalkingNow = walkingNow
     }
 
     /** Calibrate from REST samples (stand still, same carry pose). */
     fun calibrateRest(rest: List<Sample>) {
         if (rest.isEmpty()) return
+
+        // Use the last timestamp as the calibration time reference
+        val calMs = rest.last().timestampNs / 1_000_000L
+        if (lastCalibMs > 0 && (calMs - lastCalibMs) < 5000) {
+            Log.i("STEP", "Calibration skipped: too soon since last (Δt=${calMs - lastCalibMs}ms)")
+            return
+        }
 
         // --- Estimate sampling rate ---
         val firstTs = rest.first().timestampNs.toDouble()
@@ -532,31 +730,53 @@ class StepCounterZC(
             omegaVals[i] = w
         }
 
-        // --- Rest baselines ---
-        muRestSMA = smaVals.average()
-        sdRestSMA = sqrt(smaVals.map { (it - muRestSMA) * (it - muRestSMA) }.average())
-        val meanVert = vertAbs.average()
-        stdRestAxis = sqrt(vertAbs.map { (it - meanVert) * (it - meanVert) }.average())
+        // --- Quietness check ---
+        val quiet = (0 until rest.size).count { linMagVals[it] < 0.8 && omegaVals[it] < 0.8 }
+        val quietFrac = if (rest.isNotEmpty()) (quiet.toDouble() / rest.size) else 0.0
+        val proceed = quietFrac >= 0.75 || !calibrated
+        if (!proceed) {
+            Log.i("STEP", "Calibration rejected: rest too noisy (quiet=%.0f%%)".format(quietFrac * 100))
+            return
+        }
 
-        // --- Auto-tune config from rest ---
-        val newSmaWindow = min(120, max(10, (fsHz * 1.0).toInt())) // ~1s window
+        // --- Robust (trimmed) baselines ---
+        fun trimmedMeanSd(arr: DoubleArray, trim: Double = 0.10): Pair<Double, Double> {
+            if (arr.isEmpty()) return 0.0 to 0.0
+            val idx = arr.indices.sortedBy { arr[it] }
+            val n = idx.size
+            val a = (n * trim).toInt().coerceAtMost(n - 1)
+            val b = (n - a).coerceAtLeast(a + 1)
+            var sum = 0.0
+            var sum2 = 0.0
+            var k = 0
+            for (i in a until b) {
+                val v = arr[idx[i]]
+                sum += v; sum2 += v * v; k++
+            }
+            val mean = if (k > 0) sum / k else 0.0
+            val varv = if (k > 1) (sum2 / k - mean * mean) else 0.0
+            return mean to sqrt(max(0.0, varv))
+        }
 
-        // EMA smoothing alpha from tau≈0.25 s: alpha = dt/(tau+dt)
-        val tau = 0.25
-        val newAlpha = (dt / (tau + dt)).coerceIn(0.05, 0.8)
+        val (muSma, sdSma) = trimmedMeanSd(smaVals, 0.10)
+        muRestSMA = muSma
+        sdRestSMA = sdSma
 
-        // ZC band multiplier so band ~covers 99.5% of |aVert| at rest
+        val (_, sdVertAbs) = trimmedMeanSd(vertAbs, 0.10)
+        stdRestAxis = sdVertAbs // use SD of |aVert| at rest
+
+        // --- Auto-tune band multiplier from robust percentile ---
         fun percentile(p: Double, arr: DoubleArray): Double {
             if (arr.isEmpty()) return 0.0
             val sorted = arr.copyOf().apply { sort() }
-            val idx = ((sorted.size - 1) * p).coerceIn(0.0, (sorted.size - 1).toDouble())
-            val lo = idx.toInt()
+            val idxd = ((sorted.size - 1) * p).coerceIn(0.0, (sorted.size - 1).toDouble())
+            val lo = idxd.toInt()
             val hi = min(sorted.size - 1, lo + 1)
-            val frac = idx - lo
+            val frac = idxd - lo
             return sorted[lo] * (1 - frac) + sorted[hi] * frac
         }
-        val q995 = percentile(0.995, vertAbs)
-        val newCBand = if (stdRestAxis > 1e-9) max(1.2, q995 / stdRestAxis) else 2.0
+        val q990 = percentile(0.990, vertAbs)
+        val newCBand = if (stdRestAxis > 1e-9) max(1.2, q990 / stdRestAxis) else 2.0
 
         // Tilt thresholds from rest
         val muOmega = omegaVals.average()
@@ -569,8 +789,8 @@ class StepCounterZC(
         val newTiltRatio = max(1.8, 0.8 * (newTiltOmega / (newTiltLin + 1e-9)))
 
         cfg = cfg.copy(
-            smaWindow = newSmaWindow,
-            alpha = newAlpha,
+            smaWindow = min(120, max(10, (fsHz * 1.0).toInt())),
+            alpha = (dt / (0.25 + dt)).coerceIn(0.05, 0.8),
             cBand = newCBand,
             tiltOmegaThreshRadS = newTiltOmega,
             tiltLinAccelThresh = newTiltLin,
@@ -582,27 +802,44 @@ class StepCounterZC(
         vertEWin = RollingWindow(cfg.smaWindow)
         horizEWin = RollingWindow(cfg.smaWindow)
         axisEma = Ema(cfg.alpha)
+        axisEmaFast = Ema(0.65)
         omegaEma = Ema(cfg.tiltOmegaEmaAlpha)
         linEma = Ema(cfg.tiltLinEmaAlpha)
         gDirEma = Ema(cfg.tiltGDirEmaAlpha)
 
         // Reset runtime state
         calibrated = true
-        lastNonZeroSide = 0
         inBand = true
+        inBandSinceMs = -1
         lastCountedMs = -1
         lastTiltMs = -1
         zcTimesMs.clear()
         hasPrevU = false
         prevUTsNs = 0L
-        inBandSinceMs = -1
-        outsideSinceMs = -1
-        outsideConsec = 0
         prevSmoothAxis = 0.0
         prevSmoothTsMs = -1
         domX = 0.0; domY = 0.0; domZ = 0.0
         prevWalkingNow = false
         lastWalkingTrueMs = -1
+
+        // Reset rearm/hysteresis & latch states
+        requireOppSide = false
+        visitedOppSideSinceCount = false
+        bandDwellOkSinceCount = false
+        sumInBandSinceCountMs = 0.0
+        pendingCross = false
+        pendingStartMs = -1
+        pendingExt = 0.0
+        pendingPrevSlopeSign = 1
+        lastCommitUp = 0
+        expectUp = 0
+
+        // Clear pre-walk grace and stillness trackers
+        stillSinceMs = -1
+        preWalkGraceUntilMs = -1
+        lastCalibMs = calMs
+
+        Log.i("STEP", "Calibrated: mu=${muRestSMA} sd=${sdRestSMA} stdAxis=${stdRestAxis}")
     }
 
     fun reset() {
@@ -610,18 +847,29 @@ class StepCounterZC(
         muRestSMA = 0.0; sdRestSMA = 0.0; stdRestAxis = 0.0
         totalSteps = 0
         smaWin.clear(); vertEWin.clear(); horizEWin.clear()
-        lastNonZeroSide = 0; inBand = true
+        inBand = true
+        inBandSinceMs = -1
         lastCountedMs = -1; lastTiltMs = -1
         zcTimesMs.clear()
         hasPrevU = false
         prevUTsNs = 0L
-        inBandSinceMs = -1
-        outsideSinceMs = -1
-        outsideConsec = 0
         prevSmoothAxis = 0.0
         prevSmoothTsMs = -1
         domX = 0.0; domY = 0.0; domZ = 0.0
         prevWalkingNow = false
         lastWalkingTrueMs = -1
+        requireOppSide = false
+        visitedOppSideSinceCount = false
+        bandDwellOkSinceCount = false
+        sumInBandSinceCountMs = 0.0
+        pendingCross = false
+        pendingStartMs = -1
+        pendingExt = 0.0
+        pendingPrevSlopeSign = 1
+        stillSinceMs = -1
+        preWalkGraceUntilMs = -1
+        lastCommitUp = 0
+        expectUp = 0
+        lastCalibMs = -1
     }
 }
