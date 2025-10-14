@@ -115,7 +115,7 @@ data class StepCounterZCConfig(
     val tiltShakeLinMin: Double = 6.5,
 
     // Vertical/horizontal RMS ratio floor to prefer vertical projection: ↑ prefer vertical more, ↓ switch to dominant sooner.
-    val vertRmsRatioMin: Double = 1.0,
+    val vertRmsRatioMin: Double = 0.77,
     // Gate: minimum cadence (Hz) to accept from ZC cadence estimator: ↑ ignore slower walks, ↓ accept shuffles.
     val cadenceMinHz: Double = 0.25,
     // Gate: maximum cadence (Hz) to accept from ZC cadence estimator: ↑ allow very fast steps, ↓ cap high-cadence.
