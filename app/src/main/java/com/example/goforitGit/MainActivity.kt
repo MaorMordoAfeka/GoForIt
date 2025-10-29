@@ -1,152 +1,62 @@
 package com.example.goforitGit
 
-import StepCounterZC
-import android.app.Activity
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import android.os.Bundle
-import android.widget.Button
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import android.content.Intent
+import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
+import com.example.goforitGit.count_step_module.StepService
+import com.example.goforitGit.count_step_module.StepViewModel
 import kotlin.math.sqrt
 
-class MainActivity : AppCompatActivity(), SensorEventListener {
 
-    private lateinit var sm: SensorManager
-    private var acc: Sensor? = null
+class MainActivity : AppCompatActivity() {
+    private val vm: StepViewModel by viewModels()
 
-    // UI helpers (optional: resolves by id name if it exists)
-    private fun tv(name: String): TextView? {
-        val id = resources.getIdentifier(name, "id", packageName)
-        return if (id != 0) findViewById(id) else null
+    fun f3(value: Float): String =
+        String.format(java.util.Locale.US, "%.3f", value)
+
+    private fun startServiceSafely() {
+        // Start FGS regardless; service runs without location permission
+        ContextCompat.startForegroundService(this, Intent(this, StepService::class.java))
     }
-    private fun btn(name: String): Button? {
-        val id = resources.getIdentifier(name, "id", packageName)
-        return if (id != 0) findViewById(id) else null
-    }
-
-    private var stepsTv: TextView? = null
-    private var hzTv: TextView? = null
-    private var debugTv: TextView? = null
-    private var aMagTv: TextView? = null
-    private var calibrateBtn: Button? = null
-
-    private var stepsTotal = 0
-    private var countingEnabled = false
-    private var promptedToCalibrate = false
-
-    // Hz estimation (EMA) from accelerometer timestamps
-    private var prevTsNs: Long? = null
-    private var emaHz = 0.0
-
-    // Current accel
-    private var ax = 0.0f; private var ay = 0.0f; private var az = 0.0f
-
-    // Stepper matches your current StepCounterZC.kt (callback-based)
-    private val stepper: StepCounterZC by lazy {
-        StepCounterZC(
-            onStep = { /* tMillis */ _ ->
-                stepsTotal += 1
-                stepsTv?.text = "Steps: $stepsTotal"
-            }
-        )
-    }
-
-    private fun Float.f3() = String.format("%.3f", this)
-    private fun Double.f3() = String.format("%.3f", this)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Bind common ids if present (all are optional)
-        stepsTv      = tv("count") ?: tv("stepsText") ?: tv("steps")
-        hzTv         = tv("hzText") ?: tv("hz") ?: tv("freqText")
-        aMagTv       = tv("amag") ?: tv("absA") ?: tv("tvAMag")
-        debugTv      = tv("debug") ?: tv("tvDebug") ?: tv("logText")
-        calibrateBtn = btn("calibrateBtn") ?: btn("btnCalibrate") ?: btn("calibrate")
+        // start service exactly as you already do (no binding needed)
+        // it continues to push to StepBus under the hood.
+        startServiceSafely()
 
-        sm  = getSystemService(Activity.SENSOR_SERVICE) as SensorManager
-        acc = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        // Observe LiveData (lifecycle-aware, no leaks)
+        vm.steps.observe(this) { steps -> findViewById<TextView>(R.id.count).text = "Steps: $steps" }
+        vm.mode.observe(this) { mode -> findViewById<TextView>(R.id.modeText).text = "current mode: $mode" }
+        vm.cadenceSpm.observe(this) { spm -> findViewById<TextView>(R.id.avgCadenceVal).text = "SPM: $spm" }
+        vm.stepsToday.observe(this) { n -> findViewById<TextView>(R.id.todayStepsVal).text = n.toString() }
+        vm.sensorsData.observe(this) {
+            findViewById<TextView>(R.id.ax).text = "ax: ${f3(it.ax)}"
+            findViewById<TextView>(R.id.ay).text = "ay: ${f3(it.ay)}"
+            findViewById<TextView>(R.id.az).text = "az: ${f3(it.az)}"
+            findViewById<TextView>(R.id.amag).text = "|a|: ${f3(sqrt(it.ax*it.ax + it.ay*it.ay + it.az*it.az))}"
 
-        // Gate step counting behind the Calibrate button.
-        // When pressed we reset the stepper and start feeding it samples; it self-calibrates from the first ~2s.
-        calibrateBtn?.setOnClickListener {
-            stepsTotal = 0
-            stepsTv?.text = "Steps: 0"
-            stepper.reset()
-            countingEnabled = true
-            promptedToCalibrate = true // suppress future prompts
-            Toast.makeText(this, "calibration started: stand still for 2 secs", Toast.LENGTH_SHORT).show()
+            findViewById<TextView>(R.id.wx).text = "wx: ${f3(it.wx)}"
+            findViewById<TextView>(R.id.wy).text = "wy: ${f3(it.wy)}"
+            findViewById<TextView>(R.id.wz).text = "wz: ${f3(it.wz)}"
+            findViewById<TextView>(R.id.wmag).text = "|ω|: ${f3(sqrt(it.wx*it.wx + it.wy*it.wy + it.wz*it.wz))} rad/s"
+
+            findViewById<TextView>(R.id.lx).text = "lx: ${f3(it.ax-it.gx)}"
+            findViewById<TextView>(R.id.ly).text = "ly: ${f3(it.ay-it.gy)}"
+            findViewById<TextView>(R.id.lz).text = "lz: ${f3(it.az-it.gz)}"
+            findViewById<TextView>(R.id.lmag).text = "|lin|: ${f3(sqrt((it.ax-it.gx)*(it.ax-it.gx) + (it.ay-it.gy)*(it.ay-it.gy) + (it.az-it.gz)*(it.az-it.gz)))}"
+
+            findViewById<TextView>(R.id.gx).text = "gx: ${f3(it.gx)}"
+            findViewById<TextView>(R.id.gy).text = "gy: ${f3(it.gy)}"
+            findViewById<TextView>(R.id.gz).text = "gz: ${f3(it.gz)}"
+            findViewById<TextView>(R.id.gmag).text = "|g|: ${f3(sqrt(it.gx*it.gx + it.gy*it.gy + it.gz*it.gz))}"
+
+            findViewById<TextView>(R.id.hzText).text = "emaHz: ${f3(it.emaHz.toFloat())}"
         }
     }
-
-    override fun onResume() {
-        super.onResume()
-        val desiredHz = 40.0
-        val samplingUs = (1_000_000.0 / desiredHz).toInt()
-        acc?.let { sm.registerListener(this, it, samplingUs, 0) }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        sm.unregisterListener(this)
-    }
-
-    override fun onSensorChanged(e: SensorEvent) {
-        if (e.sensor.type != Sensor.TYPE_ACCELEROMETER) return
-
-        ax = e.values[0]; ay = e.values[1]; az = e.values[2]
-
-        // Show |a| for sanity (optional)
-        val aMag = sqrt((ax*ax + ay*ay + az*az).toDouble())
-        aMagTv?.text = "|a|: ${aMag.f3()}"
-
-        // Hz estimate from sensor timestamps
-        prevTsNs?.let { p ->
-            val dt = (e.timestamp - p) / 1e9
-            if (dt > 0) {
-                val instHz = 1.0 / dt
-                val alpha = 0.10
-                emaHz = if (emaHz == 0.0) instHz else (1 - alpha) * emaHz + alpha * instHz
-                hzTv?.text = "Hz≈${"%.1f".format(emaHz)}"
-            }
-        }
-        prevTsNs = e.timestamp
-
-        // Don’t feed samples until the user presses Calibrate
-        if (!countingEnabled) {
-            if (!promptedToCalibrate) {
-                Toast.makeText(this, "Press Calibrate to enable step counting", Toast.LENGTH_SHORT).show()
-                promptedToCalibrate = true
-            }
-            return
-        }
-
-        // Feed the stepper; StepCounterZC uses ms timestamps
-        val tMillis = e.timestamp / 1_000_000L
-        stepper.addSample(
-            StepCounterZC.Sample(
-                tMillis = tMillis,
-                ax = ax.toDouble(),
-                ay = ay.toDouble(),
-                az = az.toDouble()
-            )
-        )
-
-        // Optional: let the user know when self-calibration finished
-        if (stepper.isCalibrated) {
-            debugTv?.let {
-                if (it.text?.contains("Calibrated:") != true) {
-                    // The stepper itself logs a "Calibrated:" line via debug(); this just nudges the UI.
-                    it.append("\nCalibrated ✓")
-                }
-            }
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) { /* no-op */ }
 }
