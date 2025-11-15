@@ -18,47 +18,107 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 
-
-
 /**
  * Orientation-robust step counter with persistence of recent history so public API
  * can return real values across app restarts.
  */
-class StepCounterZC(
+class StepCounterZC private constructor(
     private val context: Context,
-    private var debugLogs: Boolean = true,
+    private var debugLogs: Boolean = true
 ) : SensorEventListener {
 
+    // --- Tunables and getInstance() method ---
+    companion object {
+        // The getInstance() method of the singleton:
+        // Volatile modifier is necessary due to two reasons:
+        // 1) Reads and writes to the instance are not reordered by the compiler or processor.
+        // 2) Changes made by one thread are visible to other threads immediately.
+        @Volatile
+        private var instance: StepCounterZC? = null
+        fun getInstance(context: Context, debugLogs: Boolean = true): StepCounterZC {
+            // we store the Application Context never the Activity/Service instance so the UI won't leak.
+            val appCtx = context.applicationContext
+            return instance ?: synchronized(this) {
+                instance ?: StepCounterZC(appCtx, debugLogs).also { instance = it }
+            }
+        }
+
+        // Tunables:
+        // IIR LPF time constant (seconds) for gravity.
+        private const val RC_GRAV = 0.80f
+
+        // Minimum vertical-dominance ratio to consider a lobe “step-like”.
+        private const val VDOM_MIN = 0.35f
+
+        // Base floor and scale on σ for dynamic thresholds.
+        private const val THR_FLOOR = 0.12f
+        private const val K_SIGMA = 2.2f
+
+        // Lower threshold as a fraction of high (hysteresis).
+        private const val HYST_FRAC = 0.55f
+
+        // Plausible step period bounds (~200 to 20 steps/min).
+        private const val W_MIN = 0.30f
+        private const val W_MAX = 3.00f
+
+        // Allowed deviation from wEst when validating a step.
+        private const val DELTA_MIN = 0.26f
+        private const val DELTA_FRAC = 0.36f
+
+        // EMA weight for updating cadence.
+        private const val ALPHA_W = 0.22f
+
+        // Persistence keys
+        private const val K_STEP_TIMES = "stepTimesCsv"       // comma-separated longs
+        private const val K_RECENT =
+            "recentStepsCsv"         // semicolon list of time:period:ratio:amp
+        private const val K_LAST_SAVE = "lastSaveMs"
+
+        private const val TAG_DIAG = "STEPDIAG"
+        private const val TAG_STEP = "STEP"
+    }
+
     // --- Motion classification (non-intrusive) ---
-    enum class MotionMode { UNKNOWN, STATIONARY, WALKING, RUNNING, CYCLING, DRIVING }
+    enum class MotionMode { UNKNOWN, STATIONARY, STANDING, WALKING, RUNNING, CYCLING, DRIVING }
+
     // Mode hysteresis
     private var pendingMode: MotionMode = MotionMode.UNKNOWN
     private var pendingSinceMs: Long = 0L
 
     private fun minDwellToEnter(m: MotionMode): Long = when (m) {
-        MotionMode.DRIVING    -> 5000L  // require longer evidence
-        MotionMode.CYCLING    -> 4000L
-        MotionMode.RUNNING    -> 2000L
-        MotionMode.WALKING    -> 1500L
-        MotionMode.STATIONARY -> 1500L
-        else                  -> 1000L
+        MotionMode.RUNNING    -> 400L
+        MotionMode.WALKING    -> 400L
+        MotionMode.CYCLING    -> 800L
+        MotionMode.DRIVING    -> 800L
+        MotionMode.STANDING   -> 400L
+        MotionMode.STATIONARY -> 600L
+        else                  -> 300L
     }
 
     private val _mode = MutableStateFlow(MotionMode.UNKNOWN)
     val mode: StateFlow<MotionMode> = _mode.asStateFlow()
 
     // optional: feed GPS speed from outside (FusedLocation, etc.)
-    @Volatile private var latestSpeedMps: Float? = null
-    fun updateSpeedMps(speedMps: Float?) { latestSpeedMps = speedMps }
+    @Volatile
+    private var latestSpeedMps: Float? = null
+    fun updateSpeedMps(speedMps: Float?) {
+        latestSpeedMps = speedMps
+    }
 
     // rolling window of recent samples for features (~8s)
-    private data class WinSample(val tMs: Long, val vRatio: Float, val linRms: Float, val gyro: Float)
+    private data class WinSample(
+        val tMs: Long,
+        val vRatio: Float,
+        val linRms: Float,
+        val gyro: Float
+    )
+
     private val win = ArrayDeque<WinSample>()
     private val WIN_MS = 8_000L
 
     // stash latest gyro magnitude so accel path can use it
     private var lastGyroMag = 0f
-    private var lastGyroMs  = 0L
+    private var lastGyroMs = 0L
 
     // --- Public observables ---
     private val _stepCount = MutableStateFlow(0)
@@ -91,6 +151,20 @@ class StepCounterZC(
     // --- Android sensors ---
     private val sm: SensorManager =
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+    private val stepDetector: Sensor? by lazy {
+        sm.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, /*wakeUp=*/true)
+            ?: sm.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+    }
+    private val stepSensor: Sensor? by lazy {
+        sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, /*wakeUp=*/true)
+            ?: sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+    }
+    @Volatile private var hwStepActive = false
+    private var lastHwCount: Int? = null
+    private var lastHwEventElapsedNs: Long? = null
+    private var lastStoredStepMs: Long = 0L         // to keep stored timestamps strictly increasing
+
     private val accel: Sensor? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
         sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, /*wakeUp=*/false)
     } else {
@@ -118,11 +192,15 @@ class StepCounterZC(
     // Two-phase detector: waiting in IDLE, then “armed” after a positive threshold crossing
     // until the symmetric negative crossing occurs (a stride pair).
     private enum class Phase { IDLE, ARMED_UP }
+
     private var phase = Phase.IDLE
+
     // Timestamp of previous negative crossing (stride period origin).
     private var lastDownS: Float = -1f
+
     // Exponential moving estimate of the stride period W (seconds).
     private var wEst: Float = 0f
+
     // Track local max/min between crossings to measure step amplitude.
     private var posPeak = 0f
     private var negPeak = 0f
@@ -135,8 +213,10 @@ class StepCounterZC(
         val vRatio: Float,
         val amp: Float
     )
+
     // Wall-clock timestamps (for “today”, last hour, etc.).
     private val stepTimesMs = ArrayDeque<Long>()
+
     // Small FIFO of last ~64 steps with features for analytics.
     private val recentSteps = ArrayDeque<StepFeature>()
     private val MAX_RECENT_STEPS = 64
@@ -148,35 +228,6 @@ class StepCounterZC(
     private var historyLoaded = false
     private var persistEvery = 0 // throttle writes
 
-    // --- Tunables ---
-    companion object {
-        // IIR LPF time constant (seconds) for gravity.
-        private const val RC_GRAV = 0.80f
-        // Minimum vertical-dominance ratio to consider a lobe “step-like”.
-        private const val VDOM_MIN = 0.35f
-        // Base floor and scale on σ for dynamic thresholds.
-        private const val THR_FLOOR = 0.12f
-        private const val K_SIGMA = 2.2f
-        // Lower threshold as a fraction of high (hysteresis).
-        private const val HYST_FRAC = 0.55f
-        // Plausible step period bounds (~200 to 20 steps/min).
-        private const val W_MIN = 0.30f
-        private const val W_MAX = 3.00f
-        // Allowed deviation from wEst when validating a step.
-        private const val DELTA_MIN = 0.26f
-        private const val DELTA_FRAC = 0.36f
-        // EMA weight for updating cadence.
-        private const val ALPHA_W = 0.22f
-
-        // Persistence keys
-        private const val K_STEP_TIMES = "stepTimesCsv"       // comma-separated longs
-        private const val K_RECENT = "recentStepsCsv"         // semicolon list of time:period:ratio:amp
-        private const val K_LAST_SAVE = "lastSaveMs"
-
-        private const val TAG_DIAG = "STEPDIAG"
-        private const val TAG_STEP = "STEP"
-    }
-
     // Cached thresholds
     private var thrHigh = THR_FLOOR
     private var thrLow = HYST_FRAC * THR_FLOOR
@@ -185,11 +236,9 @@ class StepCounterZC(
     private var lastSnapS = 0f
 
 
-
     // --------------------------------------------
     //                Lifecycle API
     // --------------------------------------------
-
 
 
     // setDebug(enabled) toggles logcat noise.
@@ -215,12 +264,18 @@ class StepCounterZC(
         if (debugLogs) Log.i(TAG_STEP, "Reset step counter + history")
     }
 
-    // start() lazy-loads history once, registers the accelerometer with GAME (or UI) delay.
+    // start() lazy-loads history once, registers the sensors with GAME (or UI) delay.
     fun start() {
         if (!historyLoaded) loadHistory()
 
         val rate = if (Build.VERSION.SDK_INT >= 21)
             SensorManager.SENSOR_DELAY_GAME else SensorManager.SENSOR_DELAY_UI
+
+        stepDetector?.let { sm.registerListener(this, it, rate) }
+            ?: Log.w(TAG_STEP, "step detector not available")
+
+        stepSensor?.let { sm.registerListener(this, it, rate) }
+            ?: Log.w(TAG_STEP, "step sensor not available")
 
         accel?.let { sm.registerListener(this, it, rate) }
             ?: Log.w(TAG_STEP, "Accelerometer not available")
@@ -228,7 +283,10 @@ class StepCounterZC(
         gyro?.let { sm.registerListener(this, it, rate) }
             ?: Log.w(TAG_STEP, "Gyroscope not available")
 
-        if (debugLogs) Log.i(TAG_STEP, "Registered sensors: accel=${accel!=null}, gyro=${gyro!=null} (rate=$rate)")
+        if (debugLogs) Log.i(
+            TAG_STEP,
+            "Registered sensors: accel=${accel != null}, gyro=${gyro != null} (rate=$rate)"
+        )
     }
 
     // stop() unregisters and persists history.
@@ -239,11 +297,9 @@ class StepCounterZC(
     }
 
 
-
     // --------------------------------------------
     //               Sensor callbacks
     // --------------------------------------------
-
 
 
     // No-op (accelerometer accuracy changes don’t impact our logic).
@@ -259,21 +315,86 @@ class StepCounterZC(
         when (event.sensor.type) {
             // hand tilting check
             Sensor.TYPE_GYROSCOPE -> {
-                var wx = event.values[0]; var wy = event.values[1]; var wz = event.values[2]
-                val wMag = sqrt((wx*wx + wy*wy + wz*wz).toDouble())
-                if(wMag > 3.0)
+                var wx = event.values[0];
+                var wy = event.values[1];
+                var wz = event.values[2]
+                val wMag = sqrt((wx * wx + wy * wy + wz * wz).toDouble())
+                if (wMag > 3.0)
                     return
 
                 /** data for assessment of activity */
                 lastGyroMag = wMag.toFloat()
-                lastGyroMs  = System.currentTimeMillis()
+                lastGyroMs = System.currentTimeMillis()
                 return
             }
+
+            // counting steps by a dedicated step counter
+            Sensor.TYPE_STEP_COUNTER -> {
+                hwStepActive = true
+
+                val c = event.values[0].toInt()
+                val tNs = event.timestamp // elapsedRealtimeNanos domain
+
+                val prevC  = lastHwCount
+                val prevNs = lastHwEventElapsedNs
+
+                // Update baselines for next time
+                lastHwCount = c
+                lastHwEventElapsedNs = tNs
+
+                // First event: just set the public total to the hardware value and exit
+                if (prevC == null || prevNs == null) {
+                    _stepCount.value = c
+                    _stepsFlow.value = c
+                    return
+                }
+
+                // Hardware counter can reset (e.g., sensor service restart / reboot)
+                if (c < prevC) {
+                    // Treat as new baseline; do not synthesize steps
+                    return
+                }
+
+                val delta = c - prevC
+                if (delta <= 0) return
+
+                // Map sensor elapsed time to wall-clock time (ms)
+                val nowWallMs = System.currentTimeMillis()
+                val nowElapsedNs = android.os.SystemClock.elapsedRealtimeNanos()
+                val tWallMs = nowWallMs - ((nowElapsedNs - tNs) / 1_000_000L)
+                val prevWallMs = nowWallMs - ((nowElapsedNs - prevNs) / 1_000_000L)
+
+                // Evenly distribute 'delta' steps across [prevWallMs .. tWallMs]
+                var spanMs = tWallMs - prevWallMs
+                if (spanMs < delta) spanMs = delta.toLong() // at least 1 ms per step to avoid duplicates
+
+                var lastTs = lastStoredStepMs
+                for (j in 1..delta) {
+                    var ts = prevWallMs + (j * spanMs) / delta
+                    // enforce strictly increasing timestamps (important for cadence)
+                    if (ts <= lastTs) ts = lastTs + 1
+                    stepTimesMs.add(ts)
+                    lastTs = ts
+                }
+                lastStoredStepMs = lastTs
+
+                while (stepTimesMs.size > MAX_TIMESTAMPS) stepTimesMs.removeFirst()
+
+                // Publish counters
+                val newTotal = _stepCount.value + delta
+                _stepCount.value = newTotal
+                _stepsFlow.value = newTotal
+
+                if (++persistEvery >= 5) { persistEvery = 0; persistHistory() }
+                return
+            }
+
         }
 
-
-        // beyond this point we only will address TYPE_ACCELEROMETER events
+        // beyond this point we are going to address only TYPE_ACCELEROMETER events
         if (event.sensor.type != Sensor.TYPE_ACCELEROMETER) return
+        if (hwStepActive) return  // only skip ACC path after HW really started
+
 
         // Grab the timestamp and then on first call:
         // seed lastTsNs and initial gravity with the first reading, then return.
@@ -295,7 +416,9 @@ class StepCounterZC(
         tSeconds += dt
 
         // getting Raw values of acceleration
-        val ax = event.values[0]; val ay = event.values[1]; val az = event.values[2]
+        val ax = event.values[0];
+        val ay = event.values[1];
+        val az = event.values[2]
 
         // Gravity LPF (low-pass filter)
         val alpha = dt / (RC_GRAV + dt)
@@ -303,15 +426,19 @@ class StepCounterZC(
         haveG = true
 
         // Linear accel calculation
-        val lx = ax - gX; val ly = ay - gY; val lz = az - gZ
-        val linMag = sqrt(lx*lx + ly*ly + lz*lz)
+        val lx = ax - gX;
+        val ly = ay - gY;
+        val lz = az - gZ
+        val linMag = sqrt(lx * lx + ly * ly + lz * lz)
 
         // In this vertical projection part we are taking the 3-axis accelerometer vector
         // and extracting the component that points along the direction of the gravity's unit vector.
-        val gMag = sqrt(gX*gX + gY*gY + gZ*gZ)
+        val gMag = sqrt(gX * gX + gY * gY + gZ * gZ)
         if (gMag < 1e-4f) return
-        val ux = gX / gMag; val uy = gY / gMag; val uz = gZ / gMag
-        val v = lx*ux + ly*uy + lz*uz
+        val ux = gX / gMag;
+        val uy = gY / gMag;
+        val uz = gZ / gMag
+        val v = lx * ux + ly * uy + lz * uz
         // This is a vertical-dominance metric: 1.0 if motion is along gravity, 0.0 if fully horizontal.
         // It lets us down-weight hand/pocket odd movements
         // and insist on “walk-like” vertical lobes to count steps.
@@ -342,9 +469,13 @@ class StepCounterZC(
                     phase = Phase.ARMED_UP
                     posPeak = v
                     negPeak = 0f
-                    if (debugLogs) Log.i(TAG_DIAG, "[SC] arm(+), v=%.3f T=%.3f ratio=%.2f".format(v, thrHigh, vRatio))
+                    if (debugLogs) Log.i(
+                        TAG_DIAG,
+                        "[SC] arm(+), v=%.3f T=%.3f ratio=%.2f".format(v, thrHigh, vRatio)
+                    )
                 }
             }
+
             Phase.ARMED_UP -> {
                 if (v > posPeak) posPeak = v
                 if (v < negPeak) negPeak = v
@@ -376,8 +507,8 @@ class StepCounterZC(
 
                     val onFoot = when (_mode.value) {
                         MotionMode.WALKING, MotionMode.RUNNING -> true
-                        MotionMode.UNKNOWN -> true   // allow early steps before mode locks in
-                        else -> false                // DRIVING, CYCLING, etc.
+                        MotionMode.UNKNOWN -> true
+                        else -> false
                     }
 
                     if (accepted && onFoot) {
@@ -465,30 +596,41 @@ class StepCounterZC(
         }
 
         if (debugLogs) {
-            Log.i(TAG_DIAG, "[SC] +1 step ✓ W=%.3fs amp=%.3f thr=%.3f ratio=%.2f SC=%d"
-                .format(W, p - n, thr, ratio, sc))
+            Log.i(
+                TAG_DIAG, "[SC] +1 step ✓ W=%.3fs amp=%.3f thr=%.3f ratio=%.2f SC=%d"
+                    .format(W, p - n, thr, ratio, sc)
+            )
             Log.i(TAG_STEP, "Step detected at t=%.3fs (SC=$sc)".format(tNow))
         }
     }
 
     // classify the actual activity of the user while he uses the app
     private fun classifyActivity(nowMs: Long) {
+
         if (win.size < 20) return
+
         val n = win.size
-        var sumVR = 0f; var sumL2 = 0f; var sumG2 = 0f
-        for (s in win) { sumVR += s.vRatio; sumL2 += s.linRms*s.linRms; sumG2 += s.gyro*s.gyro }
-        val vAvg   = sumVR / n
+        var sumVR = 0f;
+        var sumL2 = 0f;
+        var sumG2 = 0f
+
+        for (s in win) {
+            sumVR += s.vRatio; sumL2 += s.linRms * s.linRms; sumG2 += s.gyro * s.gyro
+        }
+
+        val vAvg = sumVR / n
         val linRms = kotlin.math.sqrt(sumL2 / n)
-        val gyroRms= kotlin.math.sqrt(sumG2 / n)
-        val speed  = latestSpeedMps
+        val gyroRms = kotlin.math.sqrt(sumG2 / n)
+        val speed = latestSpeedMps // latest speed in meters per second
 
         // steps/sec over the window you already use (~8s)
         val stepRate = countStepsSince(nowMs - WIN_MS).toFloat() / (WIN_MS / 1000f)
 
         // --- Raw condition flags (as you had) ---
-        val drivingByGps     = (speed ?: -1f) >= 6.5f            // ~23+ km/h
-        val drivingBySensors = vAvg < 0.25f && stepRate < 0.2f && gyroRms < 0.35f && linRms in 0.10f..2.50f
-        val cyclingByGps     = speed != null && speed in 3.0f..7.0f
+        val drivingByGps = (speed ?: -1f) >= 6.94f // ≈ 25+ km/h
+        val drivingBySensors =
+            vAvg < 0.25f && stepRate < 0.2f && gyroRms < 0.35f && linRms in 0.10f..2.50f
+        val cyclingByGps = speed != null && speed in 3.0f..6.8f // ≈ 10.8–24.5 km/h
         val cyclingBySensors = vAvg in 0.28f..0.55f && gyroRms in 0.60f..2.50f && stepRate < 0.5f
 
         // --- Step evidence (makes WALK/RUN "sticky") ---
@@ -496,9 +638,29 @@ class StepCounterZC(
         val lastStepFresh = stepTimesMs.isNotEmpty() && (nowMs - stepTimesMs.last() <= 1500L)
         val hasStepEvidence = steps4s >= 3 || lastStepFresh
 
+        // Treat gyro as optional; allow up to 5s since last gyro sample
+        val gyroAvailable = (gyro != null)
+        val freshGyro = !gyroAvailable || (nowMs - lastGyroMs) <= 5_000L
+
+        // Stationary: essentially no motion (phone on table, etc.)
+        val stillBySensors =
+            stepRate < 0.02f &&
+                    linRms < 0.06f &&
+                    (!gyroAvailable || gyroRms < 0.06f) &&
+                    freshGyro
+
+        // Standing: tiny human sway (no steps), wider & more tolerant bands
+        val standingBySensors =
+            !hasStepEvidence &&
+                    stepRate < 0.20f &&
+                    linRms < 1f &&
+                    (!gyroAvailable || gyroRms in 0.03f..1.00f) &&
+                    freshGyro
+
         // --- Step-based sub-classification ---
-        val runningBySteps = stepRate >= 2.2f || (wEst in 0.25f..0.55f)   // ~132+ spm or fast period
-        val walkingBySteps = stepRate >= 0.6f                             // ~36+ spm (more robust than 0.4)
+        val runningBySteps =
+            stepRate >= 2.2f && (wEst in 0.25f..0.45f) // ≈ 133–240 spm or fast period
+        val walkingBySteps = stepRate >= 0.6f // ≈ 36+ spm (more robust than 0.4)
 
         // --- Compose a raw guess with "steps get priority" rule ---
         val rawGuess = when {
@@ -506,12 +668,18 @@ class StepCounterZC(
             hasStepEvidence && walkingBySteps -> MotionMode.WALKING
             drivingByGps || drivingBySensors  -> MotionMode.DRIVING
             cyclingByGps || cyclingBySensors  -> MotionMode.CYCLING
-            linRms < 0.20f                    -> MotionMode.STATIONARY
+            standingBySensors                 -> MotionMode.STANDING
+            stillBySensors                    -> MotionMode.STATIONARY
             else                              -> MotionMode.UNKNOWN
         }
 
         // --- Hysteresis / dwell + stickiness while stepping ---
-        applyModeWithHysteresis(nowMs, rawGuess, hasStepEvidence, (drivingByGps || drivingBySensors || cyclingByGps || cyclingBySensors))
+        applyModeWithHysteresis(
+            nowMs,
+            rawGuess,
+            hasStepEvidence,
+            (drivingByGps || drivingBySensors || cyclingByGps || cyclingBySensors)
+        )
 
         // Optional debug snapshot
         if (debugLogs) {
@@ -523,6 +691,58 @@ class StepCounterZC(
         }
     }
 
+    /** Fast, transition-aware dwell.
+     *  Returns 0 for "strong-evidence" transitions (commit immediately),
+     *  small values for common quick flips (walk<->run, stop<->walk),
+     *  and -1 to indicate "use fallback dwell".
+     */
+    private fun dwellForTransition(
+        current: MotionMode,
+        target: MotionMode,
+        hasStepEvidence: Boolean,
+        vehicleLikely: Boolean
+    ): Long {
+        val speedKmh = (latestSpeedMps ?: -1f) * 3.6f
+
+        // Immediate on-foot if we have step evidence
+        if ((target == MotionMode.WALKING || target == MotionMode.RUNNING) && hasStepEvidence) {
+            return 0L
+        }
+
+        // Immediate vehicle if clearly fast and no steps now
+        if ((target == MotionMode.DRIVING || target == MotionMode.CYCLING) &&
+            !hasStepEvidence && (speedKmh >= 25f || (vehicleLikely && speedKmh >= 15f))
+        ) {
+            return 0L
+        }
+
+        // Very quick between WALKING <-> RUNNING
+        if ((current == MotionMode.WALKING && target == MotionMode.RUNNING) ||
+            (current == MotionMode.RUNNING && target == MotionMode.WALKING)
+        ) {
+            return 200L
+        }
+
+        // Quick from STATIONARY <-> WALKING
+        if ((current == MotionMode.STATIONARY && target == MotionMode.WALKING) ||
+            (current == MotionMode.WALKING && target == MotionMode.STATIONARY)
+        ) {
+            return 300L
+        }
+
+        // Quick around standing
+        if ((current == MotionMode.STATIONARY && target == MotionMode.STANDING) ||
+            (current == MotionMode.STANDING   && target == MotionMode.STATIONARY)) {
+            return 200L
+        }
+        if ((current == MotionMode.STANDING && target == MotionMode.WALKING) ||
+            (current == MotionMode.WALKING  && target == MotionMode.STANDING)) {
+            return 250L
+        }
+
+        return -1L // signal: use fallback minDwellToEnter(target)
+    }
+
     private fun applyModeWithHysteresis(
         nowMs: Long,
         rawGuess: MotionMode,
@@ -530,102 +750,55 @@ class StepCounterZC(
         vehicleLikely: Boolean
     ) {
         val current = _mode.value
+        val speedKmh = (latestSpeedMps ?: 0f) * 3.6f
 
-        // If we're currently WALKING/RUNNING, don't flip to vehicle/unknown while steps are present.
+        // While currently on-foot, don't drop to vehicle/unknown if steps are still coming,
+        // unless speed is clearly high (let vehicle preempt when undeniably moving fast).
         if ((current == MotionMode.WALKING || current == MotionMode.RUNNING) &&
             (rawGuess == MotionMode.CYCLING || rawGuess == MotionMode.DRIVING ||
-                    rawGuess == MotionMode.UNKNOWN || rawGuess == MotionMode.STATIONARY)) {
-            if (hasStepEvidence) return
+                    rawGuess == MotionMode.UNKNOWN  || rawGuess == MotionMode.STATIONARY)
+        ) {
+            if (hasStepEvidence && speedKmh < 25f) return
         }
 
-        // To *enter* a vehicle mode, require no step evidence (or clear GPS speed) first.
-        if ((rawGuess == MotionMode.DRIVING || rawGuess == MotionMode.CYCLING) && hasStepEvidence) {
+        // To enter a vehicle mode, require either: no step evidence or clear GPS speed.
+        if ((rawGuess == MotionMode.DRIVING || rawGuess == MotionMode.CYCLING) &&
+            hasStepEvidence && speedKmh < 10f
+        ) {
             return
         }
 
-        // Dwell: the new raw guess must persist for a minimum time before we commit.
+        // Compute a fast/transition-aware dwell; fall back to per-mode dwell if needed.
+        val fast = dwellForTransition(current, rawGuess, hasStepEvidence, vehicleLikely)
+        val dwell = if (fast >= 0) fast else minDwellToEnter(rawGuess)
+
+        // If this is a new candidate...
         if (rawGuess != pendingMode) {
             pendingMode = rawGuess
             pendingSinceMs = nowMs
+
+            // ...and dwell is 0, commit immediately (true "real-time" flip).
+            if (dwell == 0L && rawGuess != current) {
+                _mode.value = rawGuess
+                if (debugLogs) Log.i(TAG_DIAG, "[MODE] $rawGuess (instant)")
+            }
             return
         }
 
-        val dwell = minDwellToEnter(rawGuess)
-        if (nowMs - pendingSinceMs >= dwell && rawGuess != current) {
+        // Same candidate as last tick — check dwell time.
+        if (rawGuess != current && (nowMs - pendingSinceMs) >= dwell) {
             _mode.value = rawGuess
-            if (debugLogs) Log.i(TAG_DIAG, "[MODE] $rawGuess (confirmed after ${nowMs - pendingSinceMs} ms)")
+            if (debugLogs) Log.i(
+                TAG_DIAG,
+                "[MODE] $rawGuess (confirmed after ${nowMs - pendingSinceMs} ms; dwell=$dwell)"
+            )
         }
     }
-
-
-
-    // ------------------------------------------------------------
-    //                 Public utility methods (API)
-    // ------------------------------------------------------------
-
-
-
-    /** Simple average steps-per-minute.
-     *  1) Time-based: use steps in the last 2 minutes → (N-1)/span * 60.
-     *  2) Fallback: median period from recentSteps → 60/median(W).
-     *  Both paths clamp to a plausible human range.
-     */
-    fun getAvgSpm(): Int {
-        val windowMs   = 7200000L      // 2 hours
-        val minSpanMs  = 5_000L        // avoid tiny spans exploding the ratio
-        val minSteps   = 4             // need at least a few steps
-        val maxSpm     = 240f          // plausible human upper bound
-
-        val now = System.currentTimeMillis()
-
-        // --- Primary: time-based from stepTimesMs ---
-        if (stepTimesMs.size >= minSteps) {
-            val win = stepTimesMs.filter { it >= now - windowMs }
-            if (win.size >= minSteps) {
-                val spanMs = (win.last() - win.first()).coerceAtLeast(minSpanMs)
-                val spm = (win.size - 1) * 60_000f / spanMs
-                return spm.coerceIn(0f, maxSpm).toInt()
-            }
-        }
-
-        // --- Fallback: median period from recentSteps ---
-        val periods = recentSteps
-            .map { it.periodS }
-            .filter { it in W_MIN..W_MAX }      // use the class bounds
-            .sorted()
-
-        if (periods.isNotEmpty()) {
-            val medianW = periods[periods.size / 2]
-            val spm = 60f / medianW
-            return spm.coerceIn(0f, maxSpm).toInt()
-        }
-
-        return 0
-    }
-
-    /** Total steps that occurred today (local time), using persisted timestamps. */
-    fun getTotalStepsForToday(): Int {
-        val cal = java.util.Calendar.getInstance()
-        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-        cal.set(java.util.Calendar.MINUTE, 0)
-        cal.set(java.util.Calendar.SECOND, 0)
-        cal.set(java.util.Calendar.MILLISECOND, 0)
-        val startOfDay = cal.timeInMillis
-        return countStepsSince(startOfDay)
-    }
-
-    /** Total steps taken within the last [durationMillis], using persisted timestamps. */
-    fun getTotalStepsWithinTheLastDurationMillis(durationMillis: Long): Int {
-        val since = System.currentTimeMillis() - durationMillis
-        return countStepsSince(since)
-    }
-
 
 
     // ------------------------------------------------
-    //             helpers (count + clamp)
+    //             helper method count
     // ------------------------------------------------
-
 
 
     private fun countStepsSince(sinceMs: Long): Int {
@@ -634,18 +807,11 @@ class StepCounterZC(
         for (t in stepTimesMs) if (t >= sinceMs) c++
         return c
     }
-    private fun clamp01(x: Float): Float = when {
-        x < 0f -> 0f
-        x > 1f -> 1f
-        else -> x
-    }
-
 
 
     // -----------------------------------------------------
     //         persistence layer (simple, bounded CSV)
     // -----------------------------------------------------
-
 
 
     private fun persistHistory() {
@@ -658,7 +824,10 @@ class StepCounterZC(
             .putString(K_RECENT, recCsv)
             .putLong(K_LAST_SAVE, System.currentTimeMillis())
             .apply()
-        if (debugLogs) Log.i(TAG_STEP, "Persisted history: steps=${stepTimesMs.size}, recent=${recentSteps.size}")
+        if (debugLogs) Log.i(
+            TAG_STEP,
+            "Persisted history: steps=${stepTimesMs.size}, recent=${recentSteps.size}"
+        )
     }
 
     private fun loadHistory() {

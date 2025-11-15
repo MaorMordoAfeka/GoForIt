@@ -156,13 +156,13 @@
                     android:textSize="16sp"
                     android:fontFamily="monospace" />
 
-                <!-- Mode centered -->
                 <TextView
                     android:id="@+id/modeText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
                     android:gravity="center"
+                    android:textStyle="bold"
                     android:text="current mode: UNKNOWN"
                     android:textColor="#EDEDED"
                     android:textSize="16sp" />
@@ -177,52 +177,16 @@
                 android:orientation="vertical"
                 android:layoutDirection="ltr">
 
-                <!-- Avg cadence -->
                 <TextView
-                    android:id="@+id/avgCadenceLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Avg cadence (SPM):"
-                    android:textColor="#EDEDED"
-                    android:textSize="16sp"/>
-
-                <TextView
-                    android:id="@+id/avgCadenceVal"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="SPM: 0"
-                    android:textColor="#EDEDED"
-                    android:textSize="16sp"
-                    android:layout_marginTop="4dp"/>
-
-                <!-- Today total steps -->
-                <TextView
-                    android:id="@+id/todayStepsLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:text="Today's steps:"
-                    android:textColor="#EDEDED"
-                    android:textSize="16sp"/>
-
-                <TextView
-                    android:id="@+id/todayStepsVal"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="0"
-                    android:textColor="#EDEDED"
-                    android:textSize="16sp"
-                    android:layout_marginTop="4dp"/>
-
-                <!-- Steps in last duration -->
-                <TextView
-                    android:id="@+id/lastDurLabel"
+                    android:id="@+id/specifyDurationLabel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="20dp"
-                    android:text="Steps in last duration:"
+                    android:text="Enter minutes to see your stats for that period (up to now):"
                     android:textColor="#EDEDED"
-                    android:textSize="16sp"/>
+                    android:textSize="20sp"
+                    android:fontFamily="sans-serif-medium"
+                    />
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -252,6 +216,55 @@
                         android:backgroundTint="#CFA7FF"/>
                 </LinearLayout>
 
+                <Space
+                    android:layout_width="20dp"
+                    android:layout_height="20dp" />
+
+                <TextView
+                    android:id="@+id/avgCadenceLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Avg steps per duration:"
+                    android:textColor="#EDEDED"
+                    android:textSize="16sp"/>
+
+                <TextView
+                    android:id="@+id/avgCadenceVal"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0"
+                    android:textColor="#EDEDED"
+                    android:textSize="16sp"
+                    android:layout_marginTop="4dp"/>
+
+                <!-- Today total steps -->
+                <TextView
+                    android:id="@+id/todayStepsLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="Today's steps:"
+                    android:textColor="#EDEDED"
+                    android:textSize="16sp"/>
+
+                <TextView
+                    android:id="@+id/todayStepsVal"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0"
+                    android:textColor="#EDEDED"
+                    android:textSize="16sp"
+                    android:layout_marginTop="4dp"/>
+
+                <TextView
+                    android:id="@+id/lastDurStepsLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Steps within that Duration:"
+                    android:textColor="#EDEDED"
+                    android:textSize="16sp"
+                    android:layout_marginTop="12dp"/>
+
                 <TextView
                     android:id="@+id/lastDurStepsVal"
                     android:layout_width="wrap_content"
@@ -260,6 +273,17 @@
                     android:textColor="#EDEDED"
                     android:textSize="16sp"
                     android:layout_marginTop="12dp"/>
+
+                <TextView
+                    android:id="@+id/KmH"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Current Km/H: 0"
+                    android:textColor="#EDEDED"
+                    android:layout_marginTop="20dp"
+                    android:textSize="20sp"
+                    android:fontFamily="sans-serif-medium" />
+
             </LinearLayout>
         </LinearLayout>
     </ScrollView>
