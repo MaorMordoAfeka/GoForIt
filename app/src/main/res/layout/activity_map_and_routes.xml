@@ -1,0 +1,170 @@
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Map always full-screen -->
+    <org.maplibre.android.maps.MapView
+        android:id="@+id/mapView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Optional: small button to open/close the sheet -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabMenu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:contentDescription="Route options"
+        app:srcCompat="@android:drawable/ic_menu_sort_by_size"
+        app:layout_anchor="@id/mapView"
+        app:layout_anchorGravity="bottom|end" />
+
+    <!-- Bottom sheet slider (your current menu moved here) -->
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/routeSheet"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        android:padding="12dp"
+        android:background="#CC000000"
+        app:layout_behavior="com.google.android.material.bottomsheet.BottomSheetBehavior"
+        app:behavior_peekHeight="84dp"
+        app:behavior_hideable="false"
+        app:behavior_fitToContents="false"
+        app:behavior_halfExpandedRatio="0.45">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Drag handle -->
+            <View
+                android:layout_width="44dp"
+                android:layout_height="5dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginBottom="12dp"
+                android:background="#66FFFFFF" />
+
+            <!-- Start -->
+            <com.google.android.material.textfield.TextInputLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:boxBackgroundMode="outline"
+                app:boxStrokeColor="#88FFFFFF"
+                app:boxStrokeErrorColor="#FF6666"
+                app:hintTextColor="#88FFFFFF">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/etStart"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="Start (lat,lon) or tap map"
+                    android:inputType="text"
+                    android:textColor="#FFFFFF" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <!-- Destination -->
+            <com.google.android.material.textfield.TextInputLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                app:boxBackgroundMode="outline"
+                app:boxStrokeColor="#88FFFFFF"
+                app:boxStrokeErrorColor="#FF6666"
+                app:hintTextColor="#88FFFFFF">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/etDest"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="Destination (lat,lon) or tap map"
+                    android:inputType="text"
+                    android:textColor="#FFFFFF" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Parks / Beaches"
+                android:textColor="#FFFFFF" />
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/sParks"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:stepSize="0.05"
+                android:value="0.5"
+                android:valueFrom="0"
+                android:valueTo="1" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Residential"
+                android:textColor="#FFFFFF" />
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/sResidential"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:stepSize="0.05"
+                android:value="0.5"
+                android:valueFrom="0"
+                android:valueTo="1" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Busy Areas (shops/restaurants)"
+                android:textColor="#FFFFFF" />
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/sBusy"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:stepSize="0.05"
+                android:value="0.5"
+                android:valueFrom="0"
+                android:valueTo="1" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Extra distance budget (km)"
+                android:textColor="#FFFFFF" />
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/sDistanceKm"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="0"
+                android:valueTo="10"
+                android:stepSize="0.5"
+                android:value="2" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPlan"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Plan Route (offline)" />
+
+            <TextView
+                android:id="@+id/tvHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Status: idle"
+                android:textColor="#FFFFFF" />
+
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

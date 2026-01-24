@@ -1,0 +1,101 @@
+{
+  "version": 8,
+  "name": "Offline Shortbread (Localhost) + Glyphs",
+  "glyphs": "asset://glyphs/{fontstack}/{range}.pbf",
+  "sources": {
+    "sb": {
+      "type": "vector",
+      "tiles": ["http://127.0.0.1:8080/tiles/{z}/{x}/{y}.pbf"],
+      "minzoom": 0,
+      "maxzoom": 14
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": { "background-color": "#1e1e1e" }
+    },
+
+    {
+      "id": "land",
+      "type": "fill",
+      "source": "sb",
+      "source-layer": "land",
+      "paint": { "fill-color": "#2a332a" }
+    },
+
+    {
+      "id": "ocean",
+      "type": "fill",
+      "source": "sb",
+      "source-layer": "ocean",
+      "paint": { "fill-color": "#16324a" }
+    },
+    {
+      "id": "water_polygons",
+      "type": "fill",
+      "source": "sb",
+      "source-layer": "water_polygons",
+      "paint": { "fill-color": "#1b3b5a" }
+    },
+
+    {
+      "id": "buildings",
+      "type": "fill",
+      "source": "sb",
+      "source-layer": "buildings",
+      "paint": { "fill-color": "#3a3a3a" }
+    },
+
+    {
+      "id": "streets",
+      "type": "line",
+      "source": "sb",
+      "source-layer": "streets",
+      "paint": {
+        "line-color": "#d8d8d8",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.6, 14, 2.2]
+      }
+    },
+
+    {
+      "id": "place_labels",
+      "type": "symbol",
+      "source": "sb",
+      "source-layer": "place_labels",
+      "minzoom": 6,
+      "layout": {
+        "text-field": ["coalesce", ["get", "name_en"], ["get", "name"]],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 6, 12, 12, 18],
+        "text-optional": true
+      },
+      "paint": {
+        "text-color": "#ffffff",
+        "text-halo-color": "#1e1e1e",
+        "text-halo-width": 1.5
+      }
+    },
+
+    {
+      "id": "street_labels",
+      "type": "symbol",
+      "source": "sb",
+      "source-layer": "street_labels",
+      "minzoom": 12,
+      "layout": {
+        "symbol-placement": "line",
+        "text-field": ["coalesce", ["get", "name_en"], ["get", "name"], ["get", "ref"]],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": 12,
+        "text-optional": true
+      },
+      "paint": {
+        "text-color": "#f0f0f0",
+        "text-halo-color": "#1e1e1e",
+        "text-halo-width": 1.2
+      }
+    }
+  ]
+}
