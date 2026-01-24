@@ -6,16 +6,17 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.example.goforitGit.bluetooth_bonus_stations_module.BleAdvertScanService
 import com.example.goforitGit.count_step_module.StepService
 import com.example.goforitGit.count_step_module.StepViewModel
+import com.example.goforitGit.map_routes_module.MapAndRoutesActivity
 import kotlin.math.sqrt
-
-
 
 
 fun f3(value: Float): String =
@@ -23,42 +24,64 @@ fun f3(value: Float): String =
 
 class MainActivity : AppCompatActivity() {
     private val vm: StepViewModel by viewModels()
-    private val repo by lazy { com.example.goforitGit.count_step_module.StepRepository.get(application) }
+    private val repo by lazy {
+        com.example.goforitGit.count_step_module.StepRepository.get(
+            application
+        )
+    }
 
+    // ------------------ ACTIVITY RECOGNITION (existing) ------------------
     private fun hasActivityPermission(): Boolean =
         if (Build.VERSION.SDK_INT >= 29)
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
+            ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACTIVITY_RECOGNITION
+            ) == PackageManager.PERMISSION_GRANTED
         else true
 
+    // 1) Activity Recognition callback — start FGS here
     private val requestActivityRecognition =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted || hasActivityPermission()) {
-                // Let the service upgrade its FGS type and continue with location
-                ContextCompat.startForegroundService(
-                    this,
-                    Intent(this, StepService::class.java).setAction(StepService.ACTION_PERMS_UPDATED)
+                // Tell the service that permissions changed (regular start)
+                startService(
+                    Intent(this, StepService::class.java)
+                        .setAction(StepService.ACTION_PERMS_UPDATED)
                 )
+                // Now promote to Foreground (allowed because we're in a foreground Activity)
+                startCountingServiceSafely()
+
+                // continue the permission chain
                 ensureLocationPermission()
             } else {
-                // Optional: explain why HW step sensors may not work without this
-                android.widget.Toast.makeText(this, "Physical Activity permission denied", android.widget.Toast.LENGTH_SHORT).show()
-                // Still continue to ask for location if you want GPS features:
+                Toast.makeText(this, "Physical Activity permission denied", Toast.LENGTH_SHORT)
+                    .show()
                 ensureLocationPermission()
             }
         }
 
+    // 2) If already granted, also start FGS before continuing
     private fun ensureActivityPermission() {
         if (Build.VERSION.SDK_INT >= 29 && !hasActivityPermission()) {
             requestActivityRecognition.launch(Manifest.permission.ACTIVITY_RECOGNITION)
         } else {
-            // Already granted or not needed on this API → move on to location
+            // Permission already OK → start FGS now
+            startCountingServiceSafely()
+            // and continue to location/ble
             ensureLocationPermission()
         }
     }
 
+    // ------------------ LOCATION (existing) ------------------
     private fun hasLocationPermission(): Boolean =
-        ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+                ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
 
     private val requestPostNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -72,11 +95,15 @@ class MainActivity : AppCompatActivity() {
                     grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
                     hasLocationPermission()
             if (granted) {
-                // Tell the service to upgrade its FGS type + start GPS now
                 ContextCompat.startForegroundService(
                     this,
-                    Intent(this, StepService::class.java).setAction(StepService.ACTION_PERMS_UPDATED)
+                    Intent(
+                        this,
+                        StepService::class.java
+                    ).setAction(StepService.ACTION_PERMS_UPDATED)
                 )
+                // If we're on pre-12 devices, location covers BLE scan permission: try BLE now
+                ensureBlePermission()
             }
         }
 
@@ -88,31 +115,98 @@ class MainActivity : AppCompatActivity() {
                     Manifest.permission.ACCESS_COARSE_LOCATION
                 )
             )
+        } else {
+            // Location already granted → continue with BLE permission
+            ensureBlePermission()
         }
     }
 
-    /** Start service with an explicit user-initiated action so FGS promotion is allowed. */
-    private fun startServiceSafely() {
+    /** Start step service with explicit user action so FGS promotion is allowed. */
+    private fun startCountingServiceSafely() {
         ContextCompat.startForegroundService(
             this,
             Intent(this, StepService::class.java).setAction(StepService.ACTION_START_FGS)
         )
     }
 
+    private fun startBleServiceSafely() {
+        BleAdvertScanService.start(this)
+    }
+
+    // ------------------ NEW: BLUETOOTH SCAN PERMISSIONS ------------------
+    /** On Android 12+ we need BLUETOOTH_SCAN (and often BLUETOOTH_CONNECT if you read names). */
+    private fun hasBleScanPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            // On Android 10–11 scanning relies on location permission (already handled above)
+            hasLocationPermission()
+        }
+    }
+
+    private val requestBlePerms =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                grants[Manifest.permission.BLUETOOTH_SCAN] == true || hasBleScanPermission()
+            } else {
+                hasLocationPermission()
+            }
+            if (granted) {
+                startBleServiceSafely()
+            } else {
+                android.widget.Toast.makeText(
+                    this,
+                    "Bluetooth scan permission denied",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
+    /** Ensures we have the right permission for BLE scanning, then starts the service. */
+    private fun ensureBlePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (hasBleScanPermission()) {
+                startBleServiceSafely()
+            } else {
+                // Request both; CONNECT is useful to read device name/address safely on 12+
+                requestBlePerms.launch(
+                    arrayOf(
+                        Manifest.permission.BLUETOOTH_SCAN,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    )
+                )
+            }
+        } else {
+            // On older devices, location is enough; if already granted, go.
+            if (hasLocationPermission()) startBleServiceSafely()
+        }
+    }
+
+    // ------------------ Activity lifecycle ------------------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        startServiceSafely()
-
-        // POST_NOTIFICATIONS → ACTIVITY_RECOGNITION → LOCATION
+        // POST_NOTIFICATIONS → ACTIVITY_RECOGNITION → LOCATION → BLE (12+)
         if (Build.VERSION.SDK_INT >= 33) {
             requestPostNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             ensureActivityPermission()
         }
 
-        // Observe LiveData (lifecycle-aware)
+        // Also handle intent action if Activity was launched from the service notification
+        if (intent?.action == "ACTION_REQUEST_BLE_PERMISSIONS") {
+            ensureBlePermission()
+        }
+
+        // ----- Existing UI bindings -----
+        vm.spm.observe(this) { spm ->
+            findViewById<TextView>(R.id.spmText).text = "SPM: " + spm.toInt().toString()
+        }
+
         vm.kmhLD.observe(this) { speed ->
             findViewById<TextView>(R.id.KmH).text =
                 "Current Km/H: ${if (speed != null) f3(speed * 3.6f) else "0.000"}"
@@ -127,32 +221,6 @@ class MainActivity : AppCompatActivity() {
             findViewById<TextView>(R.id.todayStepsVal).text = n.toString()
         }
         vm.sensorsData.observe(this) {
-            findViewById<TextView>(R.id.ax).text = "ax: ${f3(it.ax)}"
-            findViewById<TextView>(R.id.ay).text = "ay: ${f3(it.ay)}"
-            findViewById<TextView>(R.id.az).text = "az: ${f3(it.az)}"
-            findViewById<TextView>(R.id.amag).text =
-                "|a|: ${f3(sqrt(it.ax * it.ax + it.ay * it.ay + it.az * it.az))}"
-
-            findViewById<TextView>(R.id.wx).text = "wx: ${f3(it.wx)}"
-            findViewById<TextView>(R.id.wy).text = "wy: ${f3(it.wy)}"
-            findViewById<TextView>(R.id.wz).text = "wz: ${f3(it.wz)}"
-            findViewById<TextView>(R.id.wmag).text =
-                "|ω|: ${f3(sqrt(it.wx * it.wx + it.wy * it.wy + it.wz * it.wz))} rad/s"
-
-            findViewById<TextView>(R.id.lx).text = "lx: ${f3(it.ax - it.gx)}"
-            findViewById<TextView>(R.id.ly).text = "ly: ${f3(it.ay - it.gy)}"
-            findViewById<TextView>(R.id.lz).text = "lz: ${f3(it.az - it.gz)}"
-            findViewById<TextView>(R.id.lmag).text =
-                "|lin|: ${f3(sqrt((it.ax - it.gx) * (it.ax - it.gx) +
-                        (it.ay - it.gy) * (it.ay - it.gy) +
-                        (it.az - it.gz) * (it.az - it.gz)))}"
-
-            findViewById<TextView>(R.id.gx).text = "gx: ${f3(it.gx)}"
-            findViewById<TextView>(R.id.gy).text = "gy: ${f3(it.gy)}"
-            findViewById<TextView>(R.id.gz).text = "gz: ${f3(it.gz)}"
-            findViewById<TextView>(R.id.gmag).text =
-                "|g|: ${f3(sqrt(it.gx * it.gx + it.gy * it.gy + it.gz * it.gz))}"
-
             findViewById<TextView>(R.id.hzText).text = "emaHz: ${f3(it.emaHz.toFloat())}"
         }
 
@@ -165,7 +233,11 @@ class MainActivity : AppCompatActivity() {
             if (minutes == null || minutes <= 0) {
                 tvLastDurStepsVal.text = "0"
                 tvAvgCadenceVal.text = "0"
-                android.widget.Toast.makeText(this, "Enter minutes > 0", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(
+                    this,
+                    "Enter minutes > 0",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
                 return@setOnClickListener
             }
 
@@ -175,5 +247,11 @@ class MainActivity : AppCompatActivity() {
             val avgStepsPerDuration = repo.computeAvgStepsPerDuration(minutes.toLong())
             tvAvgCadenceVal.text = avgStepsPerDuration.toString()
         }
+
+        findViewById<android.widget.Button>(R.id.mapAndRoutesBtn).setOnClickListener {
+            val intent = Intent(this, MapAndRoutesActivity::class.java)
+            startActivity(intent)
+        }
+
     }
 }
