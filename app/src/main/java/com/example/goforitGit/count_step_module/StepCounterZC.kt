@@ -191,14 +191,20 @@ class StepCounterZC private constructor(
     }
 
     private val accel: Sensor? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
-        sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, false)
+        sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, true)
+            ?: sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     } else {
         sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     }
 
-    private val gyro: Sensor? =
+    private val gyro: Sensor? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+        sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE, true)
+            ?: sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+            ?: sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED)
+    } else {
         sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
             ?: sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED)
+    }
 
     // endregion
 
@@ -611,8 +617,8 @@ class StepCounterZC private constructor(
         val hwExclusive = useHardwareOnlyForCounting()
         val allowAccSteps = !hwExclusive && (!hwStepActive || hwSilent)
 
-        if(!allowAccSteps)
-            return
+        // NOTE: Do NOT return early here! We still need to process for activity classification
+        // even when in power-save mode. Only step detection should be skipped.
 
         // Initialize on first sample
         val ts = event.timestamp
@@ -658,7 +664,7 @@ class StepCounterZC private constructor(
         // Vertical-dominance metric: 1.0 if motion is along gravity, 0.0 if fully horizontal
         val vRatio = abs(v) / (linMag + 1e-6f)
 
-        // --- Activity Classification ---
+        // --- Activity Classification (ALWAYS runs, even in power save mode) ---
         val nowMs = System.currentTimeMillis()
         updateTiltBlocking(nowMs, ux, uy, uz)
         updateActivityWindow(nowMs, vRatio, linMag)
@@ -676,8 +682,10 @@ class StepCounterZC private constructor(
         thrHigh = min(dynamicThr, 1.6f)
         thrLow = HYST_FRAC * thrHigh
 
-        // --- Step Detection State Machine ---
-        processStepDetection(v, vRatio, nowMs)
+        // --- Step Detection State Machine (ONLY when not in power-save/HW-exclusive mode) ---
+        if (allowAccSteps) {
+            processStepDetection(v, vRatio, nowMs)
+        }
 
         // Emit sample for UI/debugging
         _samples.tryEmit(
@@ -691,6 +699,7 @@ class StepCounterZC private constructor(
             )
         )
     }
+
 
     private fun updateTiltBlocking(nowMs: Long, ux: Float, uy: Float, uz: Float) {
         if (havePrevGUnit) {
@@ -918,17 +927,17 @@ class StepCounterZC private constructor(
         val cyclingBySensors = (vAvg in 0.28f..0.55f && gyroRms in 0.60f..2.50f && stepRate < 0.25f) && !hasStepOrCadence
 
         val gyroAvailable = (gyro != null)
-        val freshGyro = !gyroAvailable || (nowMs - lastGyroMs) <= 5_000L
+        val freshGyro = !gyroAvailable || lastGyroMs == 0L || (nowMs - lastGyroMs) <= 5_000L
 
         val stillBySensors = stepRate < 0.02f &&
-                linRms < 0.06f &&
-                (!gyroAvailable || gyroRms < 0.06f) &&
+                linRms < 0.20f &&
+                (!gyroAvailable || gyroRms < 0.15f) &&
                 freshGyro
 
         val standingBySensors = !hasStepEvidence &&
                 stepRate < 0.20f &&
                 linRms < 1f &&
-                (!gyroAvailable || gyroRms in 0.03f..1.00f) &&
+                (!gyroAvailable || gyroRms <= 1.00f) &&
                 freshGyro
 
         // --- Compose raw guess with "steps get priority" rule ---
@@ -937,8 +946,8 @@ class StepCounterZC private constructor(
             hasStepEvidence && walkingBySteps -> MotionMode.WALKING
             drivingByGps || drivingBySensors -> MotionMode.DRIVING
             cyclingByGps || cyclingBySensors -> MotionMode.CYCLING
-            standingBySensors -> MotionMode.STANDING_STILL
-            stillBySensors -> MotionMode.STATIONARY
+            stillBySensors -> MotionMode.STATIONARY          // ← More specific, check FIRST
+            standingBySensors -> MotionMode.STANDING_STILL   // ← Less specific, check SECOND
             else -> MotionMode.UNKNOWN
         }
 
