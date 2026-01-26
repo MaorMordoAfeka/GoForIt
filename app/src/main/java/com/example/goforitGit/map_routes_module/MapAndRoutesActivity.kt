@@ -27,9 +27,67 @@ import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.FillExtrusionLayer
 import org.maplibre.android.style.layers.PropertyFactory.*
 import org.maplibre.android.style.expressions.Expression.*
+import org.maplibre.android.style.layers.CircleLayer
 
 
 class MapAndRoutesActivity : AppCompatActivity() {
+
+
+    private val startSourceId = "start-source"
+    private val destSourceId  = "dest-source"
+    private val startLayerId  = "start-layer"
+    private val destLayerId   = "dest-layer"
+
+    private val emptyFC = """{"type":"FeatureCollection","features":[]}"""
+
+    private fun pointFC(p: LatLng?): String {
+        if (p == null) return emptyFC
+        return """
+        {
+          "type":"FeatureCollection",
+          "features":[
+            {"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[${p.longitude},${p.latitude}]}}
+          ]
+        }
+    """.trimIndent()
+    }
+
+    private fun ensurePinLayers(style: Style) {
+        // Sources
+        if (style.getSource(startSourceId) == null) style.addSource(GeoJsonSource(startSourceId, emptyFC))
+        if (style.getSource(destSourceId)  == null) style.addSource(GeoJsonSource(destSourceId,  emptyFC))
+
+        // Start = RED
+        if (style.getLayer(startLayerId) == null) {
+            style.addLayer(
+                CircleLayer(startLayerId, startSourceId).withProperties(
+                    circleColor(Color.parseColor("#E53935")),  // red
+                    circleRadius(8f),
+                    circleStrokeColor(Color.WHITE),
+                    circleStrokeWidth(2f),
+                    circleOpacity(0.95f)
+                )
+            )
+        }
+
+        // Destination = GREEN
+        if (style.getLayer(destLayerId) == null) {
+            style.addLayer(
+                CircleLayer(destLayerId, destSourceId).withProperties(
+                    circleColor(Color.parseColor("#43A047")),  // green
+                    circleRadius(8f),
+                    circleStrokeColor(Color.WHITE),
+                    circleStrokeWidth(2f),
+                    circleOpacity(0.95f)
+                )
+            )
+        }
+    }
+
+    private fun updatePins(style: Style) {
+        style.getSourceAs<GeoJsonSource>(startSourceId)?.setGeoJson(pointFC(startPoint))
+        style.getSourceAs<GeoJsonSource>(destSourceId)?.setGeoJson(pointFC(destPoint))
+    }
 
     private lateinit var sheetBehavior: BottomSheetBehavior<View>
     private lateinit var mapView: MapView
@@ -106,6 +164,9 @@ class MapAndRoutesActivity : AppCompatActivity() {
             map.setStyle(Style.Builder().fromUri("asset://style_vector_localhost.json")) { style ->
                 mapStyle = style
 
+                ensurePinLayers(style)
+                updatePins(style)
+
                 // 3D camera with tilt (pitch) for building extrusion
                 map.cameraPosition = CameraPosition.Builder()
                     .target(LatLng(32.0853, 34.7818))  // Tel Aviv
@@ -150,6 +211,8 @@ class MapAndRoutesActivity : AppCompatActivity() {
                         tvHint.text = "Destination set. Press Plan Route."
                     }
 
+                    mapStyle?.let { updatePins(it) }
+
                     sheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
                     true
                 }
@@ -168,6 +231,8 @@ class MapAndRoutesActivity : AppCompatActivity() {
                     // allow manual lat,lon edit
                     startPoint = parseLatLng(etStart.text?.toString()) ?: startPoint
                     destPoint = parseLatLng(etDest.text?.toString()) ?: destPoint
+
+                    updatePins(styleNow) // ✅ NEW: show pins immediately after manual input
 
                     val a = startPoint
                     val b = destPoint
@@ -211,8 +276,6 @@ class MapAndRoutesActivity : AppCompatActivity() {
      * Add 3D building extrusion layer programmatically.
      * This creates colorful 3D buildings based on their height.
      */
-// MapAndRoutesActivity.kt
-// Call this AFTER the style is loaded (inside map.setStyle { style -> ... })
     private fun add3DBuildingsLayer(style: Style) {
         val sourceId = "local" // must match the source id in your style json
         val layerId = "buildings-3d"
@@ -227,7 +290,6 @@ class MapAndRoutesActivity : AppCompatActivity() {
             // Show only when buildings exist and 3D makes sense
             minZoom = 14f
 
-            // If your tiles have height attributes, you can switch to them later.
             // For now, use a zoom-based constant height so you DEFINITELY see 3D.
             setProperties(
                 fillExtrusionColor(Color.parseColor("#d7ccc8")),
@@ -280,7 +342,7 @@ class MapAndRoutesActivity : AppCompatActivity() {
     override fun onStart() { super.onStart(); mapView.onStart() }
     override fun onResume() { super.onResume(); mapView.onResume() }
     override fun onPause() { mapView.onPause(); super.onPause() }
-    override fun onStop() { mapView.onStop(); super.onStop() }
+    override fun onStop() { super.onStop(); mapView.onStop() }
 
     override fun onDestroy() {
         mapView.onDestroy()
