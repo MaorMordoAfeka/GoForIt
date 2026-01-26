@@ -1,20 +1,26 @@
 package com.example.goforitGit.map_routes_module
 
+import android.util.Log
 import com.uber.h3core.H3Core
 import org.maplibre.android.geometry.LatLng
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.ln
 import kotlin.math.sin
 import kotlin.math.sqrt
 
 class H3OpeningScorer(
     private val h3: H3Core,
     private val poiRepo: PoiRepository,
+    private val h3Res: Int,
     private val diskRadiusForPoi: Int = 2,
-    private val candidateDiskRadius: Int = 2,      // ✅ search wider than 1
-    private val openingHalfAngleDeg: Double = 120.0 // ✅ much wider wedge
+    private val candidateDiskRadius: Int = 2,
+    private val openingHalfAngleDeg: Double = 120.0
 ) {
+    companion object {
+        private const val TAG = "H3OpeningScorer"
+    }
 
     data class Detour(
         val insertCell: Long,
@@ -69,11 +75,11 @@ class H3OpeningScorer(
                 newSegment = seg
             )
 
-            // Keep "best" by score/extra (router will also add "fill budget" pressure)
+            // Keep "best" by score/extra ratio
             if (best == null) {
                 best = detour
             } else {
-                val bestRatio = best!!.score / (best!!.extraMeters + 1.0)
+                val bestRatio = best.score / (best.extraMeters + 1.0)
                 val curRatio = detour.score / (detour.extraMeters + 1.0)
                 if (curRatio > bestRatio) best = detour
             }
@@ -82,19 +88,74 @@ class H3OpeningScorer(
         return best
     }
 
+    /**
+     * IMPROVED POI scoring that uses relative preference weights.
+     * This ensures that when user sets parks=high, residential=low, busy=low,
+     * cells with parks are strongly preferred over cells with busy areas.
+     */
     private fun poiScoreAroundCell(cell: Long, prefs: RoutePrefs): Double {
-        val parksBoost = 0.5 + prefs.parks.toDouble() * 1.5
-        val resBoost = 0.5 + prefs.residential.toDouble() * 1.5
-        val busyBoost = 0.5 + prefs.busy.toDouble() * 1.5
-
         val disk: List<Long> = h3.gridDisk(cell, diskRadiusForPoi)
         val diskCells = HashSet<String>(disk.size)
         for (idx: Long in disk) {
-            diskCells.add(h3.h3ToString(idx)) // ✅ your H3 has h3ToString()
+            diskCells.add(h3.h3ToString(idx))
         }
 
-        val counts = poiRepo.countCats(diskCells) // [parks,res,busy]
-        return counts[0] * parksBoost + counts[1] * resBoost + counts[2] * busyBoost
+        val counts = poiRepo.countCats(diskCells) // [parks, residential, busy]
+        val parksCount = counts[0].toDouble()
+        val resCount = counts[1].toDouble()
+        val busyCount = counts[2].toDouble()
+
+        // Get preference values
+        val pVal = prefs.parks.toDouble()
+        val rVal = prefs.residential.toDouble()
+        val bVal = prefs.busy.toDouble()
+
+        val maxPref = maxOf(pVal, rVal, bVal)
+        val total = pVal + rVal + bVal + 0.001
+
+        // Compute weights using relative scoring
+        val pWeight = computeCategoryWeight(pVal, maxPref)
+        val rWeight = computeCategoryWeight(rVal, maxPref)
+        val bWeight = computeCategoryWeight(bVal, maxPref)
+
+        // Use log scaling to normalize POI counts
+        val pNorm = logScale(parksCount)
+        val rNorm = logScale(resCount)
+        val bNorm = logScale(busyCount)
+
+        val score = pNorm * pWeight + rNorm * rWeight + bNorm * bWeight
+
+        return score
+    }
+
+    /**
+     * Compute weight for a category based on its preference value relative to others.
+     */
+    private fun computeCategoryWeight(value: Double, maxPref: Double): Double {
+        val relativeToMax = if (maxPref > 0.001) value / maxPref else 1.0
+
+        // Base weight from slider value
+        val baseWeight = value
+
+        // Bonus if this is the preferred category
+        val isPreferred = relativeToMax >= 0.8
+        val preferenceBonus = if (isPreferred) 1.5 else 0.0
+
+        // Penalty if this category is significantly lower than max
+        val penalty = if (relativeToMax < 0.5 && maxPref > 0.3) {
+            -0.5 * (1.0 - relativeToMax)
+        } else {
+            0.0
+        }
+
+        return baseWeight + preferenceBonus + penalty
+    }
+
+    /**
+     * Log scale to handle wildly different POI counts.
+     */
+    private fun logScale(count: Double): Double {
+        return if (count > 0) ln(1.0 + count) else 0.0
     }
 
     private fun safeGridPath(a: Long, b: Long): List<Long>? {

@@ -14,24 +14,34 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
 data class RoutePrefs(
-    val parks: Float,
+    val parks: Float,       // 0.0 to 1.0 (or your slider range)
     val residential: Float,
     val busy: Float,
-
+    val maxKm: Float        // EXTRA distance budget in km
+) {
     /**
-     * EXTRA distance budget (km) to add above the direct route.
-     * Example: maxKm=1.0 means “allow ~1km extra detour”.
-     * In your UI the max is 10KM.
+     * Returns true if user has set any meaningful preference (not all sliders equal/zero)
      */
-    val maxKm: Float
-)
+    fun hasPreference(): Boolean {
+        val values = listOf(parks, residential, busy)
+        val maxVal = values.maxOrNull() ?: 0f
+        val minVal = values.minOrNull() ?: 0f
+        // If there's at least 0.2 difference between max and min, user has a preference
+        return (maxVal - minVal) >= 0.15f || maxVal >= 0.3f
+    }
+}
 
 class OfflineRouter(private val ctx: Context) {
+
+    companion object {
+        private const val TAG = "OfflineRouter"
+    }
 
     private val exec = Executors.newSingleThreadExecutor()
     private val ready = AtomicBoolean(false)
@@ -43,14 +53,9 @@ class OfflineRouter(private val ctx: Context) {
     private val h3Res = 10
 
     // ---- Budget behavior tuning ----
-    /** We try to spend at least this fraction of the user's extra budget (when feasible). */
     private val minUtilization = 0.85
-
-    /** Default overshoot allowed above (direct + extra). Increased for large budgets. */
     private val overshootSlackSmallMeters = 300.0
     private val overshootSlackLargeMeters = 700.0
-
-    /** If we are within this gap from target, we consider it good enough (can early exit). */
     private val acceptGapSmallMeters = 300.0
     private val acceptGapLargeMeters = 600.0
 
@@ -64,7 +69,6 @@ class OfflineRouter(private val ctx: Context) {
                 val graphDir = GhGraphInstaller.installIfNeeded(ctx)
 
                 val gh = GraphHopper()
-                // Must match the profile embedded in your pre-built graph.
                 gh.setProfiles(Profile("foot").setVehicle("foot").setWeighting("fastest"))
                 gh.graphHopperLocation = graphDir.absolutePath
                 gh.load()
@@ -114,6 +118,12 @@ class OfflineRouter(private val ctx: Context) {
                 val slackUpMeters = if (extraMeters >= 8000.0) overshootSlackLargeMeters else overshootSlackSmallMeters
                 val acceptGapMeters = if (extraMeters >= 8000.0) acceptGapLargeMeters else acceptGapSmallMeters
 
+                Log.d(TAG, "=== ROUTING START ===")
+                Log.d(TAG, "Prefs: parks=${prefs.parks}, res=${prefs.residential}, busy=${prefs.busy}, maxKm=${prefs.maxKm}")
+                Log.d(TAG, "Direct route: ${"%.0f".format(direct.meters)}m, Extra budget: ${"%.0f".format(extraMeters)}m")
+                Log.d(TAG, "Target: ${"%.0f".format(targetMeters)}m, Min acceptable: ${"%.0f".format(minMeters)}m")
+                Log.d(TAG, "Has meaningful preference: ${prefs.hasPreference()}")
+
                 // If extra is basically zero, return direct
                 if (extraMeters <= 25.0) {
                     onResult(
@@ -127,7 +137,7 @@ class OfflineRouter(private val ctx: Context) {
 
                 val wantK = desiredWaypoints(extraMeters)
 
-                // 3) Candidates: POI-driven + "far" candidates to actually spend big budgets (e.g., 10km)
+                // 3) Candidates: POI-driven + "far" candidates
                 val candidates = buildWaypointCandidates(
                     h3 = h3i,
                     repo = repo,
@@ -139,12 +149,7 @@ class OfflineRouter(private val ctx: Context) {
                     wantK = wantK
                 )
 
-                Log.d(
-                    "OfflineRouter",
-                    "routeAsync prefs=$prefs direct=${"%.0f".format(direct.meters)}m " +
-                            "extra=${"%.0f".format(extraMeters)}m target=${"%.0f".format(targetMeters)}m " +
-                            "min=${"%.0f".format(minMeters)}m k=$wantK candidates=${candidates.size}"
-                )
+                Log.d(TAG, "Generated ${candidates.size} waypoint candidates, want $wantK waypoints")
 
                 // 4) Try 1 waypoint (fast)
                 val best1 = pickBestOneWaypoint(
@@ -159,6 +164,10 @@ class OfflineRouter(private val ctx: Context) {
                     minMeters = minMeters,
                     slackUpMeters = slackUpMeters
                 )
+
+                if (best1 != null) {
+                    Log.d(TAG, "Best 1-waypoint route: ${"%.0f".format(best1.meters)}m")
+                }
 
                 if (best1 != null &&
                     best1.meters <= targetMeters + slackUpMeters &&
@@ -189,6 +198,10 @@ class OfflineRouter(private val ctx: Context) {
                     seed = best1
                 )
 
+                if (best2 != null) {
+                    Log.d(TAG, "Best 2-waypoint route: ${"%.0f".format(best2.meters)}m")
+                }
+
                 if (best2 != null &&
                     best2.meters <= targetMeters + slackUpMeters &&
                     best2.meters >= minMeters &&
@@ -203,7 +216,7 @@ class OfflineRouter(private val ctx: Context) {
                     return@execute
                 }
 
-                // 6) For large budgets (like 10KM), 3–4 via points are often required
+                // 6) For large budgets, try more waypoints
                 val bestK = if (wantK >= 3) {
                     pickBestKWaypointsBeam(
                         gh = gh,
@@ -223,20 +236,24 @@ class OfflineRouter(private val ctx: Context) {
 
                 val best = bestK ?: best2 ?: best1 ?: direct
 
+                Log.d(TAG, "=== ROUTING DONE === Final: ${"%.0f".format(best.meters)}m")
+
                 onResult(
                     true,
                     "OK ~${"%.2f".format(best.meters / 1000.0)} km (prefs+budget)",
                     best.points,
                     best.meters
                 )
+
             } catch (t: Throwable) {
+                Log.e(TAG, "Routing crashed", t)
                 onResult(false, "Crash: ${t.message}", emptyList(), 0.0)
             }
         }
     }
 
     // ----------------------------
-    // Core routing + selection
+    // GraphHopper routing
     // ----------------------------
 
     private data class GhRoute(
@@ -272,26 +289,20 @@ class OfflineRouter(private val ctx: Context) {
         }
     }
 
-    private fun desiredWaypoints(extraMeters: Double): Int = when {
-        extraMeters < 1000.0 -> 1
-        extraMeters < 4000.0 -> 2
-        extraMeters < 8000.0 -> 3
-        else -> 4 // e.g. 10km
+    // ----------------------------
+    // Waypoint selection
+    // ----------------------------
+
+    private fun desiredWaypoints(extraMeters: Double): Int {
+        return when {
+            extraMeters < 800 -> 1
+            extraMeters < 2000 -> 2
+            extraMeters < 5000 -> 3
+            extraMeters < 8000 -> 4
+            else -> 5
+        }
     }
 
-    /**
-     * For big extra budgets, distance proximity must dominate (otherwise POIs will "win" and routes stay short).
-     */
-    private fun distanceFirst(prefs: RoutePrefs): Boolean = prefs.maxKm >= 5f
-
-    /**
-     * Utilization-first picker with switchable priority:
-     *  - Hard cap: meters <= (target + slackUpMeters)
-     *  - Prefer routes that reach minMeters
-     *  - If distanceFirst=true: choose closest-to-target first; POI breaks ties
-     *  - Else: choose max POI first; closeness breaks ties
-     *  - If nothing reaches minMeters: choose longest-under-cap; POI breaks ties
-     */
     private fun pickBestOneWaypoint(
         gh: GraphHopper,
         h3: H3Core,
@@ -304,51 +315,30 @@ class OfflineRouter(private val ctx: Context) {
         minMeters: Double,
         slackUpMeters: Double
     ): GhRoute? {
-        val capMeters = targetMeters + slackUpMeters
-        val df = distanceFirst(prefs)
-        val maxTry = min(32, candidates.size)
+        var best: GhRoute? = null
+        var bestScore = Double.NEGATIVE_INFINITY
 
-        var bestFeasible: GhRoute? = null
-        var bestFeasiblePoi = -1e18
-        var bestFeasibleGap = 1e18
-
-        var bestFallback: GhRoute? = null
-        var bestFallbackMeters = -1e18
-        var bestFallbackPoi = -1e18
+        val maxTry = min(35, candidates.size)
 
         for (idx in 0 until maxTry) {
             val wp = candidates[idx]
             val r = routeGh(gh, listOf(start, wp, dest))
             if (!r.ok) continue
-            if (r.meters > capMeters) continue
+            if (r.meters > targetMeters + slackUpMeters) continue
 
-            val poi = scorePolylineWithH3(h3, repo, r.points, prefs)
-            val gap = abs(r.meters - targetMeters)
+            val score = computeRouteScore(h3, repo, r, prefs, targetMeters, minMeters)
 
-            if (r.meters >= minMeters) {
-                if (df) {
-                    if (gap < bestFeasibleGap || (gap == bestFeasibleGap && poi > bestFeasiblePoi)) {
-                        bestFeasibleGap = gap
-                        bestFeasiblePoi = poi
-                        bestFeasible = r
-                    }
-                } else {
-                    if (poi > bestFeasiblePoi || (poi == bestFeasiblePoi && gap < bestFeasibleGap)) {
-                        bestFeasiblePoi = poi
-                        bestFeasibleGap = gap
-                        bestFeasible = r
-                    }
-                }
-            } else {
-                if (r.meters > bestFallbackMeters || (r.meters == bestFallbackMeters && poi > bestFallbackPoi)) {
-                    bestFallbackMeters = r.meters
-                    bestFallbackPoi = poi
-                    bestFallback = r
-                }
+            if (score > bestScore) {
+                bestScore = score
+                best = r
             }
         }
 
-        return bestFeasible ?: bestFallback
+        if (best != null) {
+            Log.d(TAG, "pickBestOneWaypoint: best score=${"%.2f".format(bestScore)}, meters=${"%.0f".format(best.meters)}")
+        }
+
+        return best
     }
 
     private fun pickBestTwoWaypoints(
@@ -364,66 +354,30 @@ class OfflineRouter(private val ctx: Context) {
         slackUpMeters: Double,
         seed: GhRoute?
     ): GhRoute? {
-        val capMeters = targetMeters + slackUpMeters
-        val df = distanceFirst(prefs)
-        val top = candidates.take(16)
-
-        var bestFeasible: GhRoute? = null
-        var bestFeasiblePoi = -1e18
-        var bestFeasibleGap = 1e18
-
-        var bestFallback: GhRoute? = null
-        var bestFallbackMeters = -1e18
-        var bestFallbackPoi = -1e18
-
-        fun consider(r: GhRoute) {
-            if (!r.ok) return
-            if (r.meters > capMeters) return
-
-            val poi = scorePolylineWithH3(h3, repo, r.points, prefs)
-            val gap = abs(r.meters - targetMeters)
-
-            if (r.meters >= minMeters) {
-                if (df) {
-                    if (gap < bestFeasibleGap || (gap == bestFeasibleGap && poi > bestFeasiblePoi)) {
-                        bestFeasibleGap = gap
-                        bestFeasiblePoi = poi
-                        bestFeasible = r
-                    }
-                } else {
-                    if (poi > bestFeasiblePoi || (poi == bestFeasiblePoi && gap < bestFeasibleGap)) {
-                        bestFeasiblePoi = poi
-                        bestFeasibleGap = gap
-                        bestFeasible = r
-                    }
-                }
-            } else {
-                if (r.meters > bestFallbackMeters || (r.meters == bestFallbackMeters && poi > bestFallbackPoi)) {
-                    bestFallbackMeters = r.meters
-                    bestFallbackPoi = poi
-                    bestFallback = r
-                }
-            }
-        }
-
-        if (seed != null) consider(seed)
+        val top = candidates.take(18)
+        var best: GhRoute? = seed
+        var bestScore = if (seed != null) computeRouteScore(h3, repo, seed, prefs, targetMeters, minMeters) else Double.NEGATIVE_INFINITY
 
         for (i in top.indices) {
             for (j in i + 1 until top.size) {
-                val r = routeGh(gh, listOf(start, top[i], top[j], dest))
-                consider(r)
+                val w1 = top[i]
+                val w2 = top[j]
+                val r = routeGh(gh, listOf(start, w1, w2, dest))
+                if (!r.ok) continue
+                if (r.meters > targetMeters + slackUpMeters) continue
+
+                val score = computeRouteScore(h3, repo, r, prefs, targetMeters, minMeters)
+
+                if (score > bestScore) {
+                    bestScore = score
+                    best = r
+                }
             }
         }
 
-        return bestFeasible ?: bestFallback
+        return best
     }
 
-    /**
-     * Beam-search over K waypoints (K=3..4 for large budgets). This avoids combinatorial explosion.
-     *
-     * We keep a small beam of best partial solutions, expanding by appending one more waypoint.
-     * For walking + 10km extra, this is the piece that enables consuming most of the budget.
-     */
     private fun pickBestKWaypointsBeam(
         gh: GraphHopper,
         h3: H3Core,
@@ -438,107 +392,72 @@ class OfflineRouter(private val ctx: Context) {
         k: Int,
         seed: GhRoute?
     ): GhRoute? {
-        val capMeters = targetMeters + slackUpMeters
-        val df = distanceFirst(prefs)
-
-        val topN = if (k >= 4) 12 else 14
-        val top = candidates.take(topN)
-        if (top.isEmpty()) return seed
-
-        val beamWidth = if (k >= 4) 10 else 12
-
         data class BeamState(
-            val mask: Long,
-            val vias: List<LatLng>,
+            val waypoints: List<LatLng>,
             val route: GhRoute,
-            val poi: Double,
-            val gap: Double
+            val score: Double
         )
 
-        fun scoreAndMake(mask: Long, vias: List<LatLng>): BeamState? {
-            val pts = ArrayList<LatLng>(vias.size + 2)
-            pts.add(start)
-            pts.addAll(vias)
-            pts.add(dest)
+        val beamWidth = 6
+        var beam = ArrayList<BeamState>()
 
-            val r = routeGh(gh, pts)
-            if (!r.ok) return null
-            if (r.meters > capMeters) return null
-
-            val poi = scorePolylineWithH3(h3, repo, r.points, prefs)
-            val gap = abs(r.meters - targetMeters)
-            return BeamState(mask, vias, r, poi, gap)
+        // Initialize beam with 1-waypoint routes
+        val topCandidates = candidates.take(20)
+        for (wp in topCandidates) {
+            val r = routeGh(gh, listOf(start, wp, dest))
+            if (!r.ok) continue
+            if (r.meters > targetMeters + slackUpMeters) continue
+            val score = computeRouteScore(h3, repo, r, prefs, targetMeters, minMeters)
+            beam.add(BeamState(listOf(wp), r, score))
         }
 
-        // Ranking:
-        // feasible first; then:
-        // - distanceFirst: smallest gap wins; poi breaks ties
-        // - POI-first: highest poi wins; gap breaks ties
-        fun better(a: BeamState, b: BeamState): Boolean {
-            val aFeas = a.route.meters >= minMeters
-            val bFeas = b.route.meters >= minMeters
-            if (aFeas != bFeas) return aFeas
+        beam.sortByDescending { it.score }
+        beam = ArrayList(beam.take(beamWidth))
 
-            return if (df) {
-                if (a.gap != b.gap) a.gap < b.gap else a.poi > b.poi
-            } else {
-                if (a.poi != b.poi) a.poi > b.poi else a.gap < b.gap
-            }
-        }
+        var best: GhRoute? = seed
+        var bestScore = if (seed != null) computeRouteScore(h3, repo, seed, prefs, targetMeters, minMeters) else Double.NEGATIVE_INFINITY
 
-        // Best overall (including fallback if no feasible exists)
-        var best: BeamState? = null
+        // Expand beam up to k waypoints
+        var depth = 1
+        while (depth < k && beam.isNotEmpty()) {
+            val next = ArrayList<BeamState>()
 
-        // Seed into best (so we never get worse)
-        if (seed != null && seed.ok && seed.meters <= capMeters) {
-            val seedPoi = scorePolylineWithH3(h3, repo, seed.points, prefs)
-            val seedGap = abs(seed.meters - targetMeters)
-            best = BeamState(0L, emptyList(), seed, seedPoi, seedGap)
-        }
+            for (state in beam) {
+                // Update best if this state is good
+                if (state.route.meters >= minMeters && state.score > bestScore) {
+                    bestScore = state.score
+                    best = state.route
+                }
 
-        // Beam starts with empty vias (no route computed yet); we will compute states at depth=1..k
-        var beam = emptyList<BeamState>()
+                // Try adding another waypoint
+                for (wp in topCandidates) {
+                    if (wp in state.waypoints) continue
 
-        // Initialize depth=1 from all single-waypoint choices
-        run {
-            val next = ArrayList<BeamState>(top.size)
-            for (i in top.indices) {
-                val st = scoreAndMake(mask = 1L shl i, vias = listOf(top[i])) ?: continue
-                next.add(st)
-                if (best == null || better(st, best!!)) best = st
-            }
-            next.sortWith { x, y -> if (better(x, y)) -1 else 1 }
-            beam = next.take(beamWidth)
-        }
+                    val newWaypoints = state.waypoints + wp
+                    val pts = listOf(start) + newWaypoints + listOf(dest)
+                    val r = routeGh(gh, pts)
+                    if (!r.ok) continue
+                    if (r.meters > targetMeters + slackUpMeters) continue
 
-        // Expand to depth 2..k
-        var depth = 2
-        while (depth <= k && beam.isNotEmpty()) {
-            val next = ArrayList<BeamState>(beamWidth * top.size)
-
-            for (st in beam) {
-                for (i in top.indices) {
-                    val bit = 1L shl i
-                    if ((st.mask and bit) != 0L) continue
-
-                    val vias = ArrayList<LatLng>(st.vias.size + 1)
-                    vias.addAll(st.vias)
-                    vias.add(top[i])
-
-                    val child = scoreAndMake(mask = st.mask or bit, vias = vias) ?: continue
-                    next.add(child)
-                    if (best == null || better(child, best!!)) best = child
+                    val score = computeRouteScore(h3, repo, r, prefs, targetMeters, minMeters)
+                    next.add(BeamState(newWaypoints, r, score))
                 }
             }
 
-            next.sortWith { x, y -> if (better(x, y)) -1 else 1 }
-            beam = next.take(beamWidth)
+            next.sortByDescending { it.score }
+            beam = ArrayList(next.take(beamWidth))
             depth++
         }
 
-        // If we found any feasible (>=minMeters), best already reflects the chosen priority.
-        // If not, best will naturally be the closest we found under the cap (or seed).
-        return best?.route ?: seed
+        // Final check of beam states
+        for (state in beam) {
+            if (state.route.meters >= minMeters && state.score > bestScore) {
+                bestScore = state.score
+                best = state.route
+            }
+        }
+
+        return best
     }
 
     // ----------------------------
@@ -568,7 +487,7 @@ class OfflineRouter(private val ctx: Context) {
             )
         )
 
-        // For big budgets (like 10km), add "far" candidates to make it feasible to consume budget.
+        // For big budgets, add "far" candidates
         if (wantK >= 3 || extraWantedMeters >= 5000.0) {
             out.addAll(
                 buildFarRingCandidates(
@@ -600,9 +519,6 @@ class OfflineRouter(private val ctx: Context) {
         return uniq
     }
 
-    /**
-     * Proposes off-corridor detour waypoints based on your POI+H3 preference scoring.
-     */
     private fun buildPoiDrivenCandidatesSmart(
         h3: H3Core,
         repo: PoiRepository,
@@ -658,24 +574,17 @@ class OfflineRouter(private val ctx: Context) {
         return out
     }
 
-    /**
-     * Generates points in a ring around a center to help consume big budgets.
-     * These points are not POI-driven, but they enable multi-via routes to "stretch".
-     */
     private fun buildFarRingCandidates(center: LatLng, extraWantedMeters: Double): List<LatLng> {
-        // Choose radius based on extra budget. For 10km, a ~3.5–5km ring works well.
         val r = extraWantedMeters * 0.35
         val radiusMeters = clamp(r, 1200.0, 5200.0)
 
         val res = ArrayList<LatLng>(24)
 
-        // 12 bearings around the circle
         for (deg in 0 until 360 step 30) {
             val p = moveByMeters(center, radiusMeters, deg.toDouble())
             if (IsraelBounds.contains(p)) res.add(p)
         }
 
-        // Add a smaller inner ring too (more variety)
         val inner = clamp(radiusMeters * 0.6, 900.0, 3200.0)
         for (deg in 15 until 360 step 45) {
             val p = moveByMeters(center, inner, deg.toDouble())
@@ -694,7 +603,6 @@ class OfflineRouter(private val ctx: Context) {
     }
 
     private fun moveByMeters(origin: LatLng, meters: Double, bearingDeg: Double): LatLng {
-        // Simple local approximation is enough for short distances (<= ~5km)
         val latRad = origin.latitude * PI / 180.0
         val dLat = meters / 111_320.0
         val dLon = meters / (111_320.0 * max(0.2, cos(latRad)))
@@ -708,14 +616,66 @@ class OfflineRouter(private val ctx: Context) {
     private fun clamp(v: Double, lo: Double, hi: Double): Double = max(lo, min(hi, v))
 
     // ----------------------------
-    // Route scoring (POI/H3)
+    // IMPROVED Route scoring (POI/H3)
     // ----------------------------
 
     /**
-     * Score a route by counting POIs near the route in H3, with slider-based boosts.
-     * Buffers the sampled route cells with gridDisk(radius=1).
+     * Compute a combined score for a route based on:
+     * 1. POI preference matching (parks/residential/busy)
+     * 2. Distance budget utilization (closer to target = better)
+     *
+     * KEY IMPROVEMENTS:
+     * - Uses RELATIVE preference scoring (highest slider wins, others are penalized)
+     * - Normalizes POI counts using log scale to handle imbalanced data
+     * - Clearer separation between "I want parks" vs "I want everything equally"
      */
-    private fun scorePolylineWithH3(
+    private fun computeRouteScore(
+        h3: H3Core,
+        repo: PoiRepository,
+        route: GhRoute,
+        prefs: RoutePrefs,
+        targetMeters: Double,
+        minMeters: Double
+    ): Double {
+        val poiScore = scorePolylineWithH3Improved(h3, repo, route.points, prefs)
+
+        // Distance score: reward routes that use the budget well
+        // Penalize being too short (under-utilizing budget) or too long
+        val distanceScore = when {
+            route.meters < minMeters -> {
+                // Under minimum - penalize based on how far under
+                val shortfall = (minMeters - route.meters) / 1000.0
+                -shortfall * 2.0
+            }
+            route.meters <= targetMeters -> {
+                // In the sweet spot - reward being close to target
+                val utilization = (route.meters - (targetMeters - (targetMeters - minMeters))) / (targetMeters - minMeters + 1)
+                utilization * 5.0
+            }
+            else -> {
+                // Over target - small penalty
+                val overshoot = (route.meters - targetMeters) / 1000.0
+                -overshoot * 0.5
+            }
+        }
+
+        val totalScore = poiScore + distanceScore
+
+        Log.d(TAG, "Route score: poi=${"%.2f".format(poiScore)}, dist=${"%.2f".format(distanceScore)}, " +
+                "total=${"%.2f".format(totalScore)}, meters=${"%.0f".format(route.meters)}")
+
+        return totalScore
+    }
+
+    /**
+     * IMPROVED POI scoring that actually responds to slider preferences.
+     *
+     * Key changes:
+     * 1. Computes RELATIVE weights - highest slider gets bonus, lowest gets penalty
+     * 2. Uses log scaling to normalize wildly different POI counts
+     * 3. When user has clear preference (one slider high, others low), that category dominates
+     */
+    private fun scorePolylineWithH3Improved(
         h3: H3Core,
         repo: PoiRepository,
         pts: List<LatLng>,
@@ -723,10 +683,7 @@ class OfflineRouter(private val ctx: Context) {
     ): Double {
         if (pts.isEmpty()) return 0.0
 
-        val parksBoost = 0.5 + prefs.parks.toDouble() * 1.5
-        val resBoost = 0.5 + prefs.residential.toDouble() * 1.5
-        val busyBoost = 0.5 + prefs.busy.toDouble() * 1.5
-
+        // Sample points along the route and collect H3 cells
         val step = max(6, pts.size / 70)
         val diskRadius = 1
 
@@ -741,15 +698,83 @@ class OfflineRouter(private val ctx: Context) {
             i += step
         }
 
+        // Get raw POI counts: [parks, residential, busy]
         val counts = repo.countCats(cells)
+        val parksCount = counts[0].toDouble()
+        val resCount = counts[1].toDouble()
+        val busyCount = counts[2].toDouble()
 
-        Log.d(
-            "OfflineRouter",
-            "POI counts parks=${counts[0]} res=${counts[1]} busy=${counts[2]} " +
-                    "boosts p=$parksBoost r=$resBoost b=$busyBoost " +
-                    "cells=${cells.size} pts=${pts.size}"
-        )
+        // Convert slider values to weights using RELATIVE scoring
+        // The idea: if parks=0.8, res=0.2, busy=0.2, then parks should dominate
+        val pVal = prefs.parks.toDouble()
+        val rVal = prefs.residential.toDouble()
+        val bVal = prefs.busy.toDouble()
 
-        return counts[0] * parksBoost + counts[1] * resBoost + counts[2] * busyBoost
+        val total = pVal + rVal + bVal + 0.001 // avoid div by zero
+        val maxPref = maxOf(pVal, rVal, bVal)
+
+        // Compute weights:
+        // - If a category is the max (or close to it), it gets a strong positive weight
+        // - If a category is much lower than max, it can get negative weight (penalty)
+        // - If all are equal, all get mild positive weights
+
+        val pWeight = computeCategoryWeight(pVal, maxPref, total)
+        val rWeight = computeCategoryWeight(rVal, maxPref, total)
+        val bWeight = computeCategoryWeight(bVal, maxPref, total)
+
+        // Apply log scaling to counts to handle imbalanced data
+        // This prevents 500 cafés from drowning out 10 parks
+        val pNorm = logScale(parksCount)
+        val rNorm = logScale(resCount)
+        val bNorm = logScale(busyCount)
+
+        val score = pNorm * pWeight + rNorm * rWeight + bNorm * bWeight
+
+        Log.d(TAG, "POI scoring: counts=[parks=${"%.0f".format(parksCount)}, res=${"%.0f".format(resCount)}, busy=${"%.0f".format(busyCount)}]")
+        Log.d(TAG, "POI weights: [p=${"%.2f".format(pWeight)}, r=${"%.2f".format(rWeight)}, b=${"%.2f".format(bWeight)}]")
+        Log.d(TAG, "POI normalized: [p=${"%.2f".format(pNorm)}, r=${"%.2f".format(rNorm)}, b=${"%.2f".format(bNorm)}]")
+        Log.d(TAG, "POI final score: ${"%.2f".format(score)}")
+
+        return score
+    }
+
+    /**
+     * Compute weight for a category based on its preference value relative to others.
+     *
+     * @param value This category's slider value
+     * @param maxPref The maximum slider value among all categories
+     * @param total Sum of all slider values
+     */
+    private fun computeCategoryWeight(value: Double, maxPref: Double, total: Double): Double {
+        // How close is this value to the max?
+        val relativeToMax = if (maxPref > 0.001) value / maxPref else 1.0
+
+        // Base weight from the slider value itself (0 to 1 range)
+        val baseWeight = value
+
+        // Bonus if this is the preferred category (or close to it)
+        val isPreferred = relativeToMax >= 0.8
+        val preferenceBonus = if (isPreferred) 1.5 else 0.0
+
+        // Penalty if this category is significantly lower than the max
+        // This makes routes AVOID busy areas when user prefers parks
+        val penalty = if (relativeToMax < 0.5 && maxPref > 0.3) {
+            // User clearly prefers something else
+            -0.5 * (1.0 - relativeToMax)
+        } else {
+            0.0
+        }
+
+        // Final weight: base (0-1) + bonus (0 or 1.5) + penalty (0 to -0.5)
+        // Range roughly: -0.5 to 2.5
+        return baseWeight + preferenceBonus + penalty
+    }
+
+    /**
+     * Log scale normalization to handle wildly different POI counts.
+     * ln(1 + count) compresses large numbers while preserving relative differences.
+     */
+    private fun logScale(count: Double): Double {
+        return if (count > 0) ln(1.0 + count) else 0.0
     }
 }
