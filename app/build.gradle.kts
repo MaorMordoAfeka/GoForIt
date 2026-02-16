@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -72,6 +73,16 @@ configurations.configureEach {
 }
 
 dependencies {
+    // firebase
+    implementation(platform("com.google.firebase:firebase-bom:34.9.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-functions")
+    implementation("com.google.firebase:firebase-messaging")
+
+    // makes Task.await() work with coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    // module needed for graphHopper to work
     implementation(project(":sourceversion-shim"))
 
     // GraphHopper 11.0 (latest) - Janino excluded globally above

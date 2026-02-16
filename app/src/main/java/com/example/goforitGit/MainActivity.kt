@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,7 +17,11 @@ import com.example.goforitGit.bluetooth_bonus_stations_module.BleAdvertScanServi
 import com.example.goforitGit.count_step_module.StepService
 import com.example.goforitGit.count_step_module.StepViewModel
 import com.example.goforitGit.map_routes_module.MapAndRoutesActivity
-import kotlin.math.sqrt
+import androidx.lifecycle.lifecycleScope
+import com.example.goforitGit.server_side_module.FirebaseServerApi
+import kotlinx.coroutines.launch
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
 
 
 fun f3(value: Float): String =
@@ -189,6 +194,62 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // TODO i commented the following code in order to not mess with the server by accident
+        //  the code connects the "app user" to the firebase server, this code is supposed to be on loginActivity
+        /*
+        // change the email and password for checking the server functionality
+        val email = ""
+        val password = ""
+
+        lifecycleScope.launch {
+            // 1) Login (Email/Password)
+            val loginResult = runCatching { FirebaseServerApi.login(email, password) }
+            loginResult.onFailure { e ->
+                Log.e("AUTH", "Login failed: ${e.message}", e)
+                return@launch
+            }
+
+            val user = Firebase.auth.currentUser
+            Log.d("AUTH", "Logged in: uid=${user?.uid}")
+
+            // 2) Register this device for push notifications (Result<Boolean>)
+            val tokenResult = FirebaseServerApi.registerFcmTokenResult()
+            tokenResult.onSuccess { ok ->
+                Log.d("FCM", "FCM token registered: $ok")
+            }.onFailure { e ->
+                Log.e("FCM", "FCM token registration failed: ${e.message}", e)
+            }
+        }
+        */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         // POST_NOTIFICATIONS → ACTIVITY_RECOGNITION → LOCATION → BLE (12+)
         if (Build.VERSION.SDK_INT >= 33) {

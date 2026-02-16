@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "471815288485",
+    "project_id": "goforit-76bb6",
+    "storage_bucket": "goforit-76bb6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:471815288485:android:0b63f24e7615990729ff4c",
+        "android_client_info": {
+          "package_name": "com.example.goforitGit"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAndeyqyOzmHXfWKx_HFL_6qLJJY55JBog"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
