@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:layoutDirection="ltr">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#121212"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- Steps count -->
+        <TextView
+            android:id="@+id/count"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:gravity="center"
+            android:text="Steps: 0"
+            android:textColor="#EDEDED"
+            android:textSize="20sp" />
+
+        <!-- emaHz -->
+        <TextView
+            android:id="@+id/hzText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:text="emaHz: 0.000"
+            android:textColor="#EDEDED"
+            android:textSize="18sp" />
+
+        <!-- Mode -->
+        <TextView
+            android:id="@+id/modeText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="current mode: UNKNOWN"
+            android:textColor="#EDEDED"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <!-- SPM -->
+        <TextView
+            android:id="@+id/spmText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="SPM: 0"
+            android:textColor="#EDEDED"
+            android:textSize="18sp" />
+
+        <!-- Navigation buttons -->
+        <Button
+            android:id="@+id/leaderboardBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginTop="24dp"
+            android:text="Leaderboard" />
+
+        <Button
+            android:id="@+id/btnOpenProfile"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="Open Profile" />
+
+        <!-- Km/H + Map -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/mapAndRoutesBtn"
+                android:layout_width="110dp"
+                android:layout_height="wrap_content"
+                android:backgroundTint="#CFA7FF"
+                android:text="Open map"
+                android:textColor="#000000" />
+
+            <TextView
+                android:id="@+id/KmH"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:layout_gravity="center_vertical"
+                android:text="Current Km/H: 0.0"
+                android:textColor="#EDEDED"
+                android:textSize="20sp" />
+        </LinearLayout>
+
+        <!-- Duration query -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/durMinutesInput"
+                android:layout_width="0dp"
+                android:layout_height="50dp"
+                android:layout_weight="1"
+                android:hint="Duration (minutes)"
+                android:inputType="number"
+                android:textColor="#EDEDED"
+                android:textColorHint="#9E9E9E" />
+
+            <Button
+                android:id="@+id/queryDurationBtn"
+                android:layout_width="110dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:backgroundTint="#CFA7FF"
+                android:text="QUERY"
+                android:textColor="#000000" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Avg steps per duration:"
+            android:textColor="#EDEDED" />
+
+        <TextView
+            android:id="@+id/avgCadenceVal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0"
+            android:textColor="#EDEDED" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Today's steps:"
+            android:textColor="#EDEDED" />
+
+        <TextView
+            android:id="@+id/todayStepsVal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0"
+            android:textColor="#EDEDED" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Steps within that Duration:"
+            android:textColor="#EDEDED" />
+
+        <TextView
+            android:id="@+id/lastDurStepsVal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0"
+            android:textColor="#EDEDED" />
+
+    </LinearLayout>
+</ScrollView>

@@ -2,6 +2,27 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     id("com.google.gms.google-services")
+    id("com.chaquo.python")
+}
+
+chaquopy {
+    defaultConfig {
+        // recommended: start with the default (3.13)
+        // Different Python versions support different package wheels.
+        version = "3.13"
+
+        pip {
+            // Best practice: DON'T pin versions at first.
+            // So Chaquopy would pick the newest compatible wheels from its repository.
+            install("numpy")
+            install("pandas")
+            install("matplotlib")
+            install("seaborn")
+        }
+
+        // Only needed if Gradle can't find a matching Python on our build machine:
+        // buildPython("C:/Path/To/python.exe")
+    }
 }
 
 android {
@@ -16,6 +37,12 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // for chaquopy
+        ndk {
+            // arm64-v8a for current Android devices, and emulators on Apple silicon
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -78,6 +105,13 @@ dependencies {
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-functions")
     implementation("com.google.firebase:firebase-messaging")
+    implementation("com.google.firebase:firebase-firestore")
+
+    // WorkManager
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // Lifecycle Kotlin
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
 
     // makes Task.await() work with coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
@@ -86,7 +120,9 @@ dependencies {
     implementation(project(":sourceversion-shim"))
 
     // GraphHopper 11.0 (latest) - Janino excluded globally above
-    implementation("com.graphhopper:graphhopper-core:7.0")
+    implementation("com.graphhopper:graphhopper-core:7.0") {
+        exclude(group = "com.google.protobuf", module = "protobuf-java")
+    }
 
     // H3 for Android
     implementation("com.uber:h3-android:4.4.0")
@@ -130,6 +166,7 @@ dependencies {
     implementation("androidx.activity:activity-compose")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material:material")
+    implementation(libs.androidx.annotation)
 
     // Testing
     testImplementation(libs.junit)

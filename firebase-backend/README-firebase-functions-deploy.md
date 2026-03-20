@@ -50,7 +50,7 @@ firebase-backend/functions/src/index.ts
 Open **Android Studio → Terminal** and run:
 
 ```powershell
-cd C:\Users\orit2\AndroidStudioProjects\GoForItGit\firebase-backend\functions
+cd C:\Users\YOURUSERNAME\AndroidStudioProjects\GoForItGit\firebase-backend\functions
 npm install
 npm run build
 ```

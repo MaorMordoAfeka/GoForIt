@@ -1,106 +1,443 @@
+// functions/src/index.ts
 import * as admin from "firebase-admin";
-import { DateTime } from "luxon";
+import { DateTime, IANAZone } from "luxon";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as logger from "firebase-functions/logger";
+import * as functionsV1 from "firebase-functions/v1";
 
 admin.initializeApp();
 
 const db = admin.firestore();
 const messaging = admin.messaging();
 
+const FUNCTIONS_REGION = "us-central1";
 const DEFAULT_TZ = "Asia/Jerusalem";
 
-type CallableAuth = { uid: string };
-type CallableRequest<TData> = {
-  data: TData;
-  auth?: CallableAuth | null;
-};
+const DEFAULT_QUIET_START_HOUR = 22;
+const DEFAULT_QUIET_END_HOUR = 8;
+const ALL_INTERVALS = [0, 1, 2, 3, 4, 5] as const;
+const COLLEGE_AREA_BONUS_POINTS_PER_STEP = 10;
 
-type UserProfile = {
-  timezone: string;
-  lowActivityNudgeEnabled: boolean;
-  preferredActiveInterval: number | null;
-  preferredInactiveInterval: number | null;
-  faculty: string;
-};
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
 
-// -------------------- helpers --------------------
-
-function assertAuth<T>(req: CallableRequest<T>): string {
-  const uid = req.auth?.uid;
+function requireUid(request: { auth?: { uid?: string } | null }): string {
+  const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Login required.");
   return uid;
 }
 
+function normalizeTimezone(tzRaw: unknown): string {
+  const tz = typeof tzRaw === "string" ? tzRaw.trim() : "";
+  if (tz.length === 0) return DEFAULT_TZ;
+  return IANAZone.isValidZone(tz) ? tz : DEFAULT_TZ;
+}
+
 function toDayKey(dt: DateTime): string {
-  // Luxon toISODate() is typed as string | null (invalid DateTime can return null).
-  // This guarantees a YYYY-MM-DD string.
   return dt.toISODate() ?? dt.toFormat("yyyy-MM-dd");
 }
 
-function validDayKey(dayKey: unknown): string {
+function validateDayKey(dayKey: unknown): string {
   if (typeof dayKey !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
     throw new HttpsError("invalid-argument", "dayKey must be YYYY-MM-DD");
   }
   return dayKey;
 }
 
-function validInterval(x: unknown): number {
+function validateInterval(x: unknown, name: string): number {
   if (typeof x !== "number" || !Number.isInteger(x) || x < 0 || x > 5) {
-    throw new HttpsError("invalid-argument", "intervalIndex must be 0..5");
+    throw new HttpsError("invalid-argument", `${name} must be 0..5`);
   }
   return x;
 }
 
-function safeSteps(x: unknown): number {
-  if (typeof x !== "number" || !Number.isInteger(x) || x < 0 || x > 200000) {
+function validateHour(x: unknown, name: string): number {
+  if (typeof x !== "number" || !Number.isInteger(x) || x < 0 || x > 23) {
+    throw new HttpsError("invalid-argument", `${name} must be 0..23`);
+  }
+  return x;
+}
+
+function normalizeHour(x: unknown, fallback: number): number {
+  return typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 23 ? x : fallback;
+}
+
+function validateFaculty(x: unknown): string {
+  const faculty = typeof x === "string" ? x.trim() : "";
+  if (faculty.length > 80) {
+    throw new HttpsError("invalid-argument", "faculty must be 0..80 chars.");
+  }
+  return faculty;
+}
+
+function validateSteps(x: unknown): number {
+  if (typeof x !== "number" || !Number.isInteger(x) || x < 0 || x > 300000) {
+    throw new HttpsError("invalid-argument", "stepsTotal must be non-negative int (reasonable range).");
+  }
+  return x;
+}
+
+function validateQualifiedStepsTotal(x: unknown): number {
+  if (typeof x !== "number" || !Number.isInteger(x) || x < 0 || x > 300000) {
     throw new HttpsError(
       "invalid-argument",
-      "stepsTotal must be a non-negative int (reasonable range).",
+      "qualifiedStepsTotal must be non-negative int (reasonable range)."
     );
   }
   return x;
 }
 
+function clampSix(arr: unknown): number[] {
+  const base = Array.isArray(arr) ? arr : [];
+  const out = new Array<number>(6).fill(0);
+  for (let i = 0; i < 6; i++) {
+    const v = (base as unknown[])[i];
+    out[i] = typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
+  }
+  return out;
+}
+
+function calcStepPoints(totalSteps: number): number {
+  return Math.floor(totalSteps / 100);
+}
+
 function intervalStart(dayKey: string, intervalIndex: number, tz: string): DateTime {
-  const base = DateTime.fromISO(dayKey, { zone: tz }).startOf("day");
-  return base.plus({ hours: intervalIndex * 4 });
+  return DateTime.fromISO(dayKey, { zone: tz }).startOf("day").plus({ hours: intervalIndex * 4 });
 }
 
-function intervalEnd(dayKey: string, intervalIndex: number, tz: string): DateTime {
-  return intervalStart(dayKey, intervalIndex, tz).plus({ hours: 4 });
+function isUploaded(mask: number, intervalIndex: number): boolean {
+  return (mask & (1 << intervalIndex)) !== 0;
 }
 
-function computeSendAt(dayKey: string, intervalIndex: number, tz: string): admin.firestore.Timestamp {
-  let dt = intervalStart(dayKey, intervalIndex, tz).plus({ minutes: 5 });
+function intervalReminderHour(intervalIndex: number): number {
+  return (intervalIndex * 4) % 24;
+}
 
-  // Do not send between 00:00–06:00
-  if (dt.hour < 6) {
-    dt = dt.set({ hour: 6, minute: 5, second: 0, millisecond: 0 });
+function isHourInsideQuietHours(hour: number, quietStartHour: number, quietEndHour: number): boolean {
+  if (quietStartHour === quietEndHour) return false;
+
+  if (quietStartHour < quietEndHour) {
+    return hour >= quietStartHour && hour < quietEndHour;
   }
 
-  return admin.firestore.Timestamp.fromDate(dt.toJSDate());
+  return hour >= quietStartHour || hour < quietEndHour;
 }
 
-async function getUserProfile(uid: string): Promise<UserProfile> {
+function isReminderEligibleInterval(
+  intervalIndex: number,
+  quietStartHour: number,
+  quietEndHour: number
+): boolean {
+  const reminderHour = intervalReminderHour(intervalIndex);
+  return !isHourInsideQuietHours(reminderHour, quietStartHour, quietEndHour);
+}
+
+function allowedReminderIntervals(quietStartHour: number, quietEndHour: number): number[] {
+  return ALL_INTERVALS.filter((i) => isReminderEligibleInterval(i, quietStartHour, quietEndHour));
+}
+
+function validReminderCandidates(
+  uploadedMask: number,
+  quietStartHour: number,
+  quietEndHour: number
+): number[] {
+  return ALL_INTERVALS.filter(
+    (i) => isUploaded(uploadedMask, i) && isReminderEligibleInterval(i, quietStartHour, quietEndHour)
+  );
+}
+
+function normalizePreferredInterval(
+  value: unknown,
+  quietStartHour: number,
+  quietEndHour: number
+): number | null {
+  if (!Number.isInteger(value)) return null;
+  const interval = value as number;
+  if (interval < 0 || interval > 5) return null;
+  return isReminderEligibleInterval(interval, quietStartHour, quietEndHour) ? interval : null;
+}
+
+function firstAllowedReminderInterval(quietStartHour: number, quietEndHour: number): number {
+  const allowed = allowedReminderIntervals(quietStartHour, quietEndHour);
+  return allowed.length > 0 ? allowed[0] : 2;
+}
+
+function pickBestInterval(stepsByInterval: number[], candidates: number[]): number {
+  let best = candidates[0];
+  for (let i = 1; i < candidates.length; i++) {
+    const cur = candidates[i];
+    if (stepsByInterval[cur] > stepsByInterval[best]) best = cur;
+  }
+  return best;
+}
+
+function pickWorstInterval(stepsByInterval: number[], candidates: number[]): number {
+  let worst = candidates[0];
+  for (let i = 1; i < candidates.length; i++) {
+    const cur = candidates[i];
+    if (stepsByInterval[cur] < stepsByInterval[worst]) worst = cur;
+  }
+  return worst;
+}
+
+function nextAwakeBoundary(dt: DateTime, quietStartHour: number, quietEndHour: number): DateTime {
+  const normalized = dt.set({ second: 0, millisecond: 0 });
+
+  if (!isHourInsideQuietHours(normalized.hour, quietStartHour, quietEndHour)) {
+    return normalized;
+  }
+
+  if (quietStartHour === quietEndHour) {
+    return normalized;
+  }
+
+  if (quietStartHour < quietEndHour) {
+    let wake = normalized.set({
+      hour: quietEndHour,
+      minute: 5,
+      second: 0,
+      millisecond: 0,
+    });
+
+    if (wake.toMillis() <= normalized.toMillis()) {
+      wake = wake.plus({ days: 1 });
+    }
+
+    return wake;
+  }
+
+  if (normalized.hour >= quietStartHour) {
+    return normalized
+      .plus({ days: 1 })
+      .startOf("day")
+      .set({ hour: quietEndHour, minute: 5, second: 0, millisecond: 0 });
+  }
+
+  return normalized
+    .startOf("day")
+    .set({ hour: quietEndHour, minute: 5, second: 0, millisecond: 0 });
+}
+
+function computeSendAt(
+  dayKey: string,
+  intervalIndex: number,
+  tz: string,
+  quietStartHour: number,
+  quietEndHour: number
+): admin.firestore.Timestamp {
+  const raw = intervalStart(dayKey, intervalIndex, tz)
+    .plus({ minutes: 5 })
+    .set({ second: 0, millisecond: 0 });
+
+  const scheduled = nextAwakeBoundary(raw, quietStartHour, quietEndHour);
+  return admin.firestore.Timestamp.fromDate(scheduled.toJSDate());
+}
+
+function isTokenInvalid(code: string): boolean {
+  return (
+    code.includes("registration-token-not-registered") ||
+    code.includes("invalid-registration-token") ||
+    code.includes("messaging/registration-token-not-registered") ||
+    code.includes("messaging/invalid-registration-token")
+  );
+}
+
+type LeaderboardRow = {
+  uid: string;
+  totalPoints: number;
+  totalSteps: number;
+  bonusPoints: number;
+  faculty: string;
+};
+
+function compareLeaderboardRows(a: LeaderboardRow, b: LeaderboardRow): number {
+  if (b.totalPoints !== a.totalPoints) return b.totalPoints - a.totalPoints;
+  if (b.totalSteps !== a.totalSteps) return b.totalSteps - a.totalSteps;
+  if (b.bonusPoints !== a.bonusPoints) return b.bonusPoints - a.bonusPoints;
+  return a.uid.localeCompare(b.uid);
+}
+
+async function writeLeaderboardForDay(dayKey: string, leaderboard: LeaderboardRow[]): Promise<void> {
+  const entriesCol = db.collection("leaderboards_daily").doc(dayKey).collection("entries");
+  const existingSnap = await entriesCol.get();
+
+  const existingIds = new Set(existingSnap.docs.map((d) => d.id));
+  const wantedIds = new Set(leaderboard.map((e) => e.uid));
+
+  const ops: Array<(batch: admin.firestore.WriteBatch) => void> = [];
+
+  for (const doc of existingSnap.docs) {
+    if (!wantedIds.has(doc.id)) {
+      ops.push((batch) => batch.delete(doc.ref));
+    }
+  }
+
+  leaderboard.forEach((e, idx) => {
+    ops.push((batch) => {
+      const payload: Record<string, unknown> = {
+        uid: e.uid,
+        dayKey,
+        totalPoints: e.totalPoints,
+        totalSteps: e.totalSteps,
+        bonusPoints: e.bonusPoints,
+        rank: idx + 1,
+        faculty: e.faculty,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      if (!existingIds.has(e.uid)) {
+        payload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+
+      batch.set(entriesCol.doc(e.uid), payload, { merge: true });
+    });
+  });
+
+  const chunkSize = 400;
+  for (let i = 0; i < ops.length; i += chunkSize) {
+    const batch = db.batch();
+    for (const op of ops.slice(i, i + chunkSize)) {
+      op(batch);
+    }
+    await batch.commit();
+  }
+}
+
+async function recalculateLeaderboardForDay(dayKey: string): Promise<void> {
+  const usersSnap = await db.collection("users").get();
+  const leaderboard: LeaderboardRow[] = [];
+
+  for (const u of usersSnap.docs) {
+    const uid = u.id;
+    const userData = u.data() ?? {};
+    const faculty = typeof userData.faculty === "string" ? userData.faculty : "";
+
+    const dailySnap = await db.doc(`users/${uid}/daily/${dayKey}`).get();
+    if (!dailySnap.exists) continue;
+
+    const daily = dailySnap.data() ?? {};
+    const stepsByInterval = clampSix(daily.stepsByInterval);
+    const totalSteps = stepsByInterval.reduce((a, b) => a + b, 0);
+    const bonusPoints = Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
+    const totalPoints = calcStepPoints(totalSteps) + bonusPoints;
+
+    leaderboard.push({
+      uid,
+      totalPoints,
+      totalSteps,
+      bonusPoints,
+      faculty,
+    });
+  }
+
+  leaderboard.sort(compareLeaderboardRows);
+  await writeLeaderboardForDay(dayKey, leaderboard);
+}
+
+// -----------------------------------------------------------------------------
+// User schema / defaults
+// -----------------------------------------------------------------------------
+
+type UserDocData = {
+  uid: string;
+  createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  timezone: string;
+  lowActivityNudgeEnabled: boolean;
+  preferredActiveInterval: number | null;
+  preferredInactiveInterval: number | null;
+  quietHoursStartHour: number;
+  quietHoursEndHour: number;
+  faculty: string;
+};
+
+function buildUserDefaults(uid: string): Omit<UserDocData, "createdAt" | "updatedAt"> {
+  return {
+    uid,
+    timezone: DEFAULT_TZ,
+    lowActivityNudgeEnabled: true,
+    preferredActiveInterval: null,
+    preferredInactiveInterval: null,
+    quietHoursStartHour: DEFAULT_QUIET_START_HOUR,
+    quietHoursEndHour: DEFAULT_QUIET_END_HOUR,
+    faculty: "",
+  };
+}
+
+async function ensureUserDoc(uid: string): Promise<void> {
+  const userRef = db.doc(`users/${uid}`);
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    const data = (snap.data() ?? {}) as Record<string, unknown>;
+
+    const patch: Record<string, unknown> = {
+      uid,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (!snap.exists || data.createdAt == null) {
+      patch.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+
+    if (typeof data.timezone !== "string") patch.timezone = DEFAULT_TZ;
+    if (typeof data.lowActivityNudgeEnabled !== "boolean") patch.lowActivityNudgeEnabled = true;
+
+    const quietHoursStartHour = normalizeHour(data.quietHoursStartHour, DEFAULT_QUIET_START_HOUR);
+    const quietHoursEndHour = normalizeHour(data.quietHoursEndHour, DEFAULT_QUIET_END_HOUR);
+
+    if (data.quietHoursStartHour !== quietHoursStartHour) {
+      patch.quietHoursStartHour = quietHoursStartHour;
+    }
+    if (data.quietHoursEndHour !== quietHoursEndHour) {
+      patch.quietHoursEndHour = quietHoursEndHour;
+    }
+
+    if (!Number.isInteger(data.preferredActiveInterval) && data.preferredActiveInterval !== null) {
+      patch.preferredActiveInterval = null;
+    }
+    if (!Number.isInteger(data.preferredInactiveInterval) && data.preferredInactiveInterval !== null) {
+      patch.preferredInactiveInterval = null;
+    }
+
+    if (typeof data.faculty !== "string") patch.faculty = "";
+
+    tx.set(userRef, patch, { merge: true });
+  });
+}
+
+async function getUserProfile(uid: string): Promise<{
+  timezone: string;
+  lowActivityNudgeEnabled: boolean;
+  preferredActiveInterval: number | null;
+  preferredInactiveInterval: number | null;
+  quietHoursStartHour: number;
+  quietHoursEndHour: number;
+  faculty: string;
+}> {
   const snap = await db.doc(`users/${uid}`).get();
   const data = snap.data() ?? {};
 
-  const tzRaw = data.timezone;
-  const timezone =
-    typeof tzRaw === "string" && tzRaw.trim().length > 0 ? tzRaw.trim() : DEFAULT_TZ;
-
+  const timezone = normalizeTimezone(data.timezone);
   const lowActivityNudgeEnabled =
     typeof data.lowActivityNudgeEnabled === "boolean" ? data.lowActivityNudgeEnabled : true;
 
-  const preferredActiveInterval =
-    Number.isInteger(data.preferredActiveInterval) ? (data.preferredActiveInterval as number) : null;
+  const quietHoursStartHour = normalizeHour(data.quietHoursStartHour, DEFAULT_QUIET_START_HOUR);
+  const quietHoursEndHour = normalizeHour(data.quietHoursEndHour, DEFAULT_QUIET_END_HOUR);
 
-  const preferredInactiveInterval =
-    Number.isInteger(data.preferredInactiveInterval)
-      ? (data.preferredInactiveInterval as number)
-      : null;
+  const preferredActiveInterval = normalizePreferredInterval(
+    data.preferredActiveInterval,
+    quietHoursStartHour,
+    quietHoursEndHour
+  );
+
+  const preferredInactiveInterval = normalizePreferredInterval(
+    data.preferredInactiveInterval,
+    quietHoursStartHour,
+    quietHoursEndHour
+  );
 
   const faculty = typeof data.faculty === "string" ? data.faculty : "";
 
@@ -109,23 +446,45 @@ async function getUserProfile(uid: string): Promise<UserProfile> {
     lowActivityNudgeEnabled,
     preferredActiveInterval,
     preferredInactiveInterval,
+    quietHoursStartHour,
+    quietHoursEndHour,
     faculty,
   };
 }
 
-function calcStepPoints(totalSteps: number): number {
-  // Example: 1 point per 100 steps (adjust as needed)
-  return Math.floor(totalSteps / 100);
-}
+// -----------------------------------------------------------------------------
+// Auth trigger
+// -----------------------------------------------------------------------------
 
-// -------------------- callable: register FCM token --------------------
+export const onAuthUserCreate = functionsV1
+  .region(FUNCTIONS_REGION)
+  .auth.user()
+  .onCreate(async (user) => {
+    const uid = user.uid;
+    const userRef = db.doc(`users/${uid}`);
+    const defaults = buildUserDefaults(uid);
 
-export const registerFcmToken = onCall(async (request) => {
-  const req = request as CallableRequest<{ token?: unknown }>;
-  const uid = assertAuth(req);
+    await userRef.set(
+      {
+        ...defaults,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  });
 
-  const token = req.data?.token;
-  if (typeof token !== "string" || token.length < 20) {
+// -----------------------------------------------------------------------------
+// Callable: registerFcmToken
+// -----------------------------------------------------------------------------
+
+export const registerFcmToken = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+
+  await ensureUserDoc(uid);
+
+  const token = (request.data?.token ?? null) as unknown;
+  if (typeof token !== "string" || token.trim().length < 20) {
     throw new HttpsError("invalid-argument", "token is required.");
   }
 
@@ -134,115 +493,236 @@ export const registerFcmToken = onCall(async (request) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       platform: "android",
     },
-    { merge: true },
+    { merge: true }
   );
 
   return { ok: true };
 });
 
-// -------------------- callable: upload 4-hour bucket steps --------------------
+// -----------------------------------------------------------------------------
+// Callable: updateQuietHours
+// -----------------------------------------------------------------------------
 
-export const uploadStepInterval = onCall(async (request) => {
-  const req = request as CallableRequest<{
-    dayKey?: unknown;
-    intervalIndex?: unknown;
-    stepsTotal?: unknown;
-    uploadIntervalIndex?: unknown;
-    attributedIntervalIndex?: unknown;
-  }>;
+export const updateQuietHours = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
 
-  const uid = assertAuth(req);
+  await ensureUserDoc(uid);
 
-  const dayKey = validDayKey(req.data?.dayKey);
-  const intervalIndex = validInterval(req.data?.intervalIndex);
-  const stepsTotal = safeSteps(req.data?.stepsTotal);
+  const quietHoursStartHour = validateHour(request.data?.quietHoursStartHour, "quietHoursStartHour");
+  const quietHoursEndHour = validateHour(request.data?.quietHoursEndHour, "quietHoursEndHour");
 
-  const uploadIntervalIndex = validInterval(req.data?.uploadIntervalIndex ?? intervalIndex);
-  const attributedIntervalIndex = validInterval(req.data?.attributedIntervalIndex ?? intervalIndex);
+  await db.doc(`users/${uid}`).set(
+    {
+      quietHoursStartHour,
+      quietHoursEndHour,
+      preferredActiveInterval: null,
+      preferredInactiveInterval: null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    ok: true,
+    quietHoursStartHour,
+    quietHoursEndHour,
+  };
+});
+
+// -----------------------------------------------------------------------------
+// Callable: getMyProfile
+// -----------------------------------------------------------------------------
+
+export const getMyProfile = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+
+  await ensureUserDoc(uid);
 
   const profile = await getUserProfile(uid);
 
-  const sessionId = `${dayKey}_${intervalIndex}`;
+  return {
+    ok: true,
+    ...profile,
+  };
+});
+
+// -----------------------------------------------------------------------------
+// Callable: updateMyProfile
+// -----------------------------------------------------------------------------
+
+export const updateMyProfile = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+
+  await ensureUserDoc(uid);
+
+  const timezone = normalizeTimezone(request.data?.timezone);
+  const faculty = validateFaculty(request.data?.faculty);
+
+  const lowActivityNudgeEnabledRaw = request.data?.lowActivityNudgeEnabled as unknown;
+  if (typeof lowActivityNudgeEnabledRaw !== "boolean") {
+    throw new HttpsError(
+      "invalid-argument",
+      "lowActivityNudgeEnabled must be boolean."
+    );
+  }
+
+  const quietHoursStartHour = validateHour(
+    request.data?.quietHoursStartHour,
+    "quietHoursStartHour"
+  );
+  const quietHoursEndHour = validateHour(
+    request.data?.quietHoursEndHour,
+    "quietHoursEndHour"
+  );
+
+  const current = await getUserProfile(uid);
+
+  const quietHoursChanged =
+    current.quietHoursStartHour !== quietHoursStartHour ||
+    current.quietHoursEndHour !== quietHoursEndHour;
+
+  const patch: Record<string, unknown> = {
+    timezone,
+    faculty,
+    lowActivityNudgeEnabled: lowActivityNudgeEnabledRaw,
+    quietHoursStartHour,
+    quietHoursEndHour,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  if (quietHoursChanged) {
+    patch.preferredActiveInterval = null;
+    patch.preferredInactiveInterval = null;
+  }
+
+  await db.doc(`users/${uid}`).set(patch, { merge: true });
+
+  const updated = await getUserProfile(uid);
+
+  return {
+    ok: true,
+    ...updated,
+  };
+});
+
+// -----------------------------------------------------------------------------
+// Callable: uploadStepInterval
+// -----------------------------------------------------------------------------
+
+export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+
+  await ensureUserDoc(uid);
+
+  const dayKey = validateDayKey(request.data?.dayKey);
+  const intervalIndex = validateInterval(request.data?.intervalIndex, "intervalIndex");
+  const stepsTotal = validateSteps(request.data?.stepsTotal);
+
+  const uploadIntervalIndex =
+    request.data?.uploadIntervalIndex == null
+      ? intervalIndex
+      : validateInterval(request.data?.uploadIntervalIndex, "uploadIntervalIndex");
+
+  const attributedIntervalIndex =
+    request.data?.attributedIntervalIndex == null
+      ? intervalIndex
+      : validateInterval(request.data?.attributedIntervalIndex, "attributedIntervalIndex");
+
+  const profile = await getUserProfile(uid);
+
+  const sessionId = `${dayKey}_${attributedIntervalIndex}`;
   const sessionRef = db.doc(`users/${uid}/step_sessions/${sessionId}`);
   const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
 
-  const start = intervalStart(dayKey, intervalIndex, profile.timezone);
-  const end = intervalEnd(dayKey, intervalIndex, profile.timezone);
+  const start = intervalStart(dayKey, attributedIntervalIndex, profile.timezone);
+  const end = start.plus({ hours: 4 });
 
   await db.runTransaction(async (tx) => {
-    const prevSessionSnap = await tx.get(sessionRef);
-    const prevSteps = prevSessionSnap.exists
-      ? (prevSessionSnap.data()?.stepsTotal as number | undefined) ?? 0
-      : 0;
+    const dailySnap = await tx.get(dailyRef);
+    const daily = dailySnap.data() ?? {};
 
-    // delta to keep daily totals correct if client retries / overwrites
-    let delta = stepsTotal - prevSteps;
-    if (delta < 0) delta = stepsTotal;
+    if (dailySnap.exists && daily.isFinalized === true) {
+      throw new HttpsError("failed-precondition", `Day ${dayKey} is finalized; uploads are blocked.`);
+    }
+
+    const stepsByInterval = clampSix(daily.stepsByInterval);
+    stepsByInterval[attributedIntervalIndex] = stepsTotal;
+
+    const sumIntervals = stepsByInterval.reduce((a, b) => a + b, 0);
+    const newTotalSteps = sumIntervals;
+
+    const prevMask = Number.isInteger(daily.uploadedMask) ? (daily.uploadedMask as number) : 0;
+    const newMask = prevMask | (1 << attributedIntervalIndex);
 
     tx.set(
       sessionRef,
       {
-        sessionId,
         uid,
         dayKey,
+        sessionId,
         intervalIndex,
+        attributedIntervalIndex,
+        uploadIntervalIndex,
         startAt: admin.firestore.Timestamp.fromDate(start.toJSDate()),
         endAt: admin.firestore.Timestamp.fromDate(end.toJSDate()),
         stepsTotal,
-        uploadIntervalIndex,
-        attributedIntervalIndex,
         uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
-      { merge: true },
+      { merge: true }
     );
-
-    const dailySnap = await tx.get(dailyRef);
-    const daily = dailySnap.data() ?? {};
-
-    const stepsByInterval: number[] = Array.isArray(daily.stepsByInterval)
-      ? (daily.stepsByInterval as number[])
-      : [0, 0, 0, 0, 0, 0];
-
-    while (stepsByInterval.length < 6) stepsByInterval.push(0);
-
-    stepsByInterval[intervalIndex] = (stepsByInterval[intervalIndex] ?? 0) + delta;
-
-    const totalSteps = (Number.isInteger(daily.totalSteps) ? (daily.totalSteps as number) : 0) + delta;
 
     tx.set(
       dailyRef,
       {
+        uid,
+        dayKey,
         stepsByInterval,
-        totalSteps,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        sumIntervals,
+        totalSteps: newTotalSteps,
+        uploadedMask: newMask,
         didBonus: typeof daily.didBonus === "boolean" ? daily.didBonus : false,
-        bonusPoints: Number.isInteger(daily.bonusPoints) ? daily.bonusPoints : 0,
+        bonusPoints: Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0,
+        isFinalized: false,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
-      { merge: true },
+      { merge: true }
     );
   });
 
-  return { ok: true };
+  let leaderboardRecalculated = false;
+  try {
+    await recalculateLeaderboardForDay(dayKey);
+    leaderboardRecalculated = true;
+  } catch (err) {
+    logger.error(`uploadStepInterval: leaderboard recalculation failed for ${dayKey}`, err);
+  }
+
+  return { ok: true, leaderboardRecalculated };
 });
 
-// -------------------- callable: record bonus visit --------------------
+// -----------------------------------------------------------------------------
+// Callable: recordBonusVisit
+// -----------------------------------------------------------------------------
 
-export const recordBonusVisit = onCall(async (request) => {
-  const req = request as CallableRequest<{ stationId?: unknown; visitedAtMs?: unknown }>;
-  const uid = assertAuth(req);
+export const recordBonusVisit = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
 
-  const stationId = req.data?.stationId;
-  if (typeof stationId !== "string" || stationId.trim().length === 0) {
+  await ensureUserDoc(uid);
+
+  const stationIdRaw = request.data?.stationId as unknown;
+  if (typeof stationIdRaw !== "string" || stationIdRaw.trim().length === 0) {
     throw new HttpsError("invalid-argument", "stationId is required.");
   }
-
-  const visitedAtMsRaw = req.data?.visitedAtMs;
-  if (typeof visitedAtMsRaw !== "number" || !Number.isInteger(visitedAtMsRaw)) {
-    throw new HttpsError("invalid-argument", "visitedAtMs is required.");
-  }
+  const stationId = stationIdRaw.trim();
 
   const profile = await getUserProfile(uid);
-  const visitedDt = DateTime.fromMillis(visitedAtMsRaw, { zone: profile.timezone });
+  const visitedAtMsRaw = request.data?.visitedAtMs as unknown;
+
+  const visitedDt =
+    typeof visitedAtMsRaw === "number" && Number.isInteger(visitedAtMsRaw)
+      ? DateTime.fromMillis(visitedAtMsRaw, { zone: profile.timezone })
+      : DateTime.now().setZone(profile.timezone);
+
   const dayKey = toDayKey(visitedDt);
 
   const stationSnap = await db.doc(`bonus_stations/${stationId}`).get();
@@ -254,139 +734,262 @@ export const recordBonusVisit = onCall(async (request) => {
     ? (stationSnap.data()?.pointsValue as number)
     : 0;
 
-  // ONLY ONE BONUS PER DAY: doc id is dayKey (deterministic)
   const visitRef = db.doc(`users/${uid}/bonus_visits/${dayKey}`);
   const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
 
-  let alreadyClaimed = false;
+  let awarded = false;
 
   await db.runTransaction(async (tx) => {
-    const [dailySnap, visitSnap] = await Promise.all([tx.get(dailyRef), tx.get(visitRef)]);
+    const [visitSnap, dailySnap] = await Promise.all([tx.get(visitRef), tx.get(dailyRef)]);
     const daily = dailySnap.data() ?? {};
+    const didBonus = typeof daily.didBonus === "boolean" ? (daily.didBonus as boolean) : false;
 
-    const didBonus = typeof daily.didBonus === "boolean" ? daily.didBonus : false;
-
-    // If already claimed (flag or existing visit doc) => do nothing
-    if (didBonus || visitSnap.exists) {
-      alreadyClaimed = true;
+    if (visitSnap.exists || didBonus) {
+      awarded = false;
       return;
     }
 
-    // Create the single-per-day visit record
     tx.set(visitRef, {
-      visitId: visitRef.id, // == dayKey
+      visitId: dayKey,
       uid,
+      dayKey,
       stationId,
       visitedAt: admin.firestore.Timestamp.fromDate(visitedDt.toJSDate()),
       awardedPoints: pointsValue,
       isAwarded: true,
-      dayKey,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // Update daily aggregate exactly once
-    const prevBonus = Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
+    const bonusPointsPrev = Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
 
     tx.set(
       dailyRef,
       {
+        uid,
+        dayKey,
         didBonus: true,
-        bonusPoints: prevBonus + pointsValue,
+        bonusPoints: bonusPointsPrev + pointsValue,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
-      { merge: true },
+      { merge: true }
+    );
+
+    awarded = true;
+  });
+
+  if (awarded) {
+    try {
+      await recalculateLeaderboardForDay(dayKey);
+    } catch (err) {
+      logger.error(`recordBonusVisit: leaderboard recalculation failed for ${dayKey}`, err);
+    }
+  }
+
+  return { ok: awarded, dayKey, awardedPoints: awarded ? pointsValue : 0 };
+});
+
+// -----------------------------------------------------------------------------
+// Callable: syncCollegeAreaSteps
+// -----------------------------------------------------------------------------
+
+export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+
+  await ensureUserDoc(uid);
+
+  const dayKey = validateDayKey(request.data?.dayKey);
+  const qualifiedStepsTotal = validateQualifiedStepsTotal(request.data?.qualifiedStepsTotal);
+
+  const observedAtMsRaw = request.data?.observedAtMs as unknown;
+  const observedAtMs =
+    typeof observedAtMsRaw === "number" && Number.isInteger(observedAtMsRaw) && observedAtMsRaw > 0
+      ? observedAtMsRaw
+      : Date.now();
+
+  const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
+
+  let appliedDelta = 0;
+  let acceptedQualifiedSteps = 0;
+
+  await db.runTransaction(async (tx) => {
+    const dailySnap = await tx.get(dailyRef);
+    const daily = dailySnap.data() ?? {};
+
+    if (dailySnap.exists && daily.isFinalized === true) {
+      throw new HttpsError("failed-precondition", `Day ${dayKey} is finalized; uploads are blocked.`);
+    }
+
+    const prevQualifiedSteps =
+      Number.isInteger(daily.collegeAreaQualifiedSteps)
+        ? (daily.collegeAreaQualifiedSteps as number)
+        : 0;
+
+    acceptedQualifiedSteps = Math.max(prevQualifiedSteps, qualifiedStepsTotal);
+    appliedDelta = acceptedQualifiedSteps - prevQualifiedSteps;
+
+    const prevBonusPoints =
+      Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
+
+    const collegeAreaBonusPoints =
+      acceptedQualifiedSteps * COLLEGE_AREA_BONUS_POINTS_PER_STEP;
+
+    tx.set(
+      dailyRef,
+      {
+        uid,
+        dayKey,
+        collegeAreaQualifiedSteps: acceptedQualifiedSteps,
+        collegeAreaBonusPoints,
+        bonusPoints: prevBonusPoints + appliedDelta * COLLEGE_AREA_BONUS_POINTS_PER_STEP,
+        collegeAreaLastObservedAt: admin.firestore.Timestamp.fromMillis(observedAtMs),
+        collegeAreaLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
     );
   });
 
-  if (alreadyClaimed) {
-    return { ok: false, dayKey, awardedPoints: 0, reason: "ALREADY_CLAIMED" };
+  let leaderboardRecalculated = false;
+
+  if (appliedDelta > 0) {
+    try {
+      await recalculateLeaderboardForDay(dayKey);
+      leaderboardRecalculated = true;
+    } catch (err) {
+      logger.error(`syncCollegeAreaSteps: leaderboard recalculation failed for ${dayKey}`, err);
+    }
   }
 
-  return { ok: true, dayKey, awardedPoints: pointsValue };
+  return {
+    ok: true,
+    dayKey,
+    acceptedQualifiedSteps,
+    appliedDelta,
+    awardedPoints: appliedDelta * COLLEGE_AREA_BONUS_POINTS_PER_STEP,
+    leaderboardRecalculated,
+  };
 });
 
-
-// -------------------- scheduled: end-of-day finalize --------------------
+// -----------------------------------------------------------------------------
+// Scheduled: finalizeDay
+// -----------------------------------------------------------------------------
 
 export const finalizeDay = onSchedule(
-  { schedule: "55 23 * * *", timeZone: DEFAULT_TZ },
+  { region: FUNCTIONS_REGION, schedule: "30 0 * * *", timeZone: DEFAULT_TZ },
   async () => {
     const now = DateTime.now().setZone(DEFAULT_TZ);
-    const todayKey = toDayKey(now);
+    const dayKey = toDayKey(now.minus({ days: 1 }));
+    const nextDayKey = toDayKey(now);
 
-    logger.info(`finalizeDay: ${todayKey}`);
+    logger.info(`finalizeDay: finalizing ${dayKey}, scheduling reminders for ${nextDayKey}`);
 
     const usersSnap = await db.collection("users").get();
-
-    const leaderboard: Array<{
-      uid: string;
-      totalPoints: number;
-      totalSteps: number;
-      bonusPoints: number;
-      faculty: string;
-    }> = [];
+    const leaderboard: LeaderboardRow[] = [];
 
     for (const u of usersSnap.docs) {
       const uid = u.id;
       const profile = await getUserProfile(uid);
 
-      const dailyRef = db.doc(`users/${uid}/daily/${todayKey}`);
+      const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
       const dailySnap = await dailyRef.get();
       if (!dailySnap.exists) continue;
 
       const daily = dailySnap.data() ?? {};
-      const stepsByInterval: number[] = Array.isArray(daily.stepsByInterval)
-        ? (daily.stepsByInterval as number[])
-        : [0, 0, 0, 0, 0, 0];
+      const stepsByInterval = clampSix(daily.stepsByInterval);
+      const sumIntervals = stepsByInterval.reduce((a, b) => a + b, 0);
 
-      while (stepsByInterval.length < 6) stepsByInterval.push(0);
-
-      const totalSteps = Number.isInteger(daily.totalSteps) ? (daily.totalSteps as number) : 0;
+      const totalSteps = sumIntervals;
       const bonusPoints = Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
-      const didBonus = typeof daily.didBonus === "boolean" ? daily.didBonus : false;
+      const didBonus = typeof daily.didBonus === "boolean" ? (daily.didBonus as boolean) : false;
 
-      // best + worst interval
-      let bestInterval = 0;
-      let worstInterval = 0;
-      for (let i = 1; i < 6; i++) {
-        if ((stepsByInterval[i] ?? 0) > (stepsByInterval[bestInterval] ?? 0)) bestInterval = i;
-        if ((stepsByInterval[i] ?? 0) < (stepsByInterval[worstInterval] ?? 0)) worstInterval = i;
-      }
+      const uploadedMask = Number.isInteger(daily.uploadedMask) ? (daily.uploadedMask as number) : 0;
+      const isComplete = uploadedMask === 0b111111;
 
-      await db.doc(`users/${uid}/daily_summaries/${todayKey}`).set(
+      const candidateIntervals = validReminderCandidates(
+        uploadedMask,
+        profile.quietHoursStartHour,
+        profile.quietHoursEndHour
+      );
+
+      const bestInterval =
+        candidateIntervals.length > 0 ? pickBestInterval(stepsByInterval, candidateIntervals) : null;
+
+      const worstInterval =
+        candidateIntervals.length > 0 ? pickWorstInterval(stepsByInterval, candidateIntervals) : null;
+
+      await db.doc(`users/${uid}/daily_summaries/${dayKey}`).set(
         {
+          uid,
+          dayKey,
           bestInterval,
           worstInterval,
+          candidateIntervals,
+          quietHoursStartHour: profile.quietHoursStartHour,
+          quietHoursEndHour: profile.quietHoursEndHour,
           stepsByInterval,
+          sumIntervals,
           totalSteps,
           didBonus,
           bonusPoints,
+          uploadedMask,
+          isComplete,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         },
-        { merge: true },
+        { merge: true }
       );
 
-      // Choose tomorrow interval:
-      // active = learned preferredActiveInterval else today's bestInterval
-      // inactive = learned preferredInactiveInterval else today's worstInterval
-      // If lowActivityNudgeEnabled => earliest among (active, inactive), else active.
-      const active = profile.preferredActiveInterval ?? bestInterval;
-      const inactive = profile.preferredInactiveInterval ?? worstInterval;
+      await dailyRef.set(
+        {
+          stepsByInterval,
+          sumIntervals,
+          totalSteps,
+          isFinalized: true,
+          finalizedAt: admin.firestore.FieldValue.serverTimestamp(),
+          isComplete,
+        },
+        { merge: true }
+      );
 
-      let chosen = active;
-      if (profile.lowActivityNudgeEnabled) {
-        chosen = Math.min(active, inactive);
-      }
+      const fallbackInterval = firstAllowedReminderInterval(
+        profile.quietHoursStartHour,
+        profile.quietHoursEndHour
+      );
 
-      const nextDayKey = toDayKey(now.plus({ days: 1 }));
-      const sendAt = computeSendAt(nextDayKey, chosen, profile.timezone);
+      const active = profile.preferredActiveInterval ?? bestInterval ?? fallbackInterval;
+      const inactive = profile.preferredInactiveInterval ?? worstInterval ?? fallbackInterval;
+      const chosen = profile.lowActivityNudgeEnabled ? inactive : active;
+
+      const selectionSource = profile.lowActivityNudgeEnabled
+        ? profile.preferredInactiveInterval != null
+          ? "preferredInactiveInterval"
+          : worstInterval != null
+            ? "worstUploadedAwakeInterval"
+            : "fallbackFirstAllowedInterval"
+        : profile.preferredActiveInterval != null
+          ? "preferredActiveInterval"
+          : bestInterval != null
+            ? "bestUploadedAwakeInterval"
+            : "fallbackFirstAllowedInterval";
+
+      const sendAt = computeSendAt(
+        nextDayKey,
+        chosen,
+        profile.timezone,
+        profile.quietHoursStartHour,
+        profile.quietHoursEndHour
+      );
 
       const jobId = `${uid}_${nextDayKey}`;
+
       await db.doc(`notification_jobs/${jobId}`).set(
         {
           uid,
           dayKey: nextDayKey,
           intervalIndex: chosen,
+          candidateIntervals,
+          quietHoursStartHour: profile.quietHoursStartHour,
+          quietHoursEndHour: profile.quietHoursEndHour,
+          selectionSource,
           sendAt,
           type: "REMINDER",
           status: "PENDING",
@@ -394,40 +997,25 @@ export const finalizeDay = onSchedule(
           sentAt: null,
           lastError: null,
         },
-        { merge: true },
+        { merge: true }
       );
 
       const totalPoints = calcStepPoints(totalSteps) + bonusPoints;
       leaderboard.push({ uid, totalPoints, totalSteps, bonusPoints, faculty: profile.faculty });
     }
 
-    leaderboard.sort((a, b) => b.totalPoints - a.totalPoints);
-
-    const batch = db.batch();
-    leaderboard.forEach((e, idx) => {
-      const ref = db.doc(`leaderboards_daily/${todayKey}/entries/${e.uid}`);
-      batch.set(
-        ref,
-        {
-          uid: e.uid,
-          totalPoints: e.totalPoints,
-          totalSteps: e.totalSteps,
-          bonusPoints: e.bonusPoints,
-          rank: idx + 1,
-          faculty: e.faculty,
-        },
-        { merge: true },
-      );
-    });
-
-    await batch.commit();
-  },
+    leaderboard.sort(compareLeaderboardRows);
+    await writeLeaderboardForDay(dayKey, leaderboard);
+  }
 );
 
-// -------------------- scheduled: dispatch notification jobs --------------------
+// -----------------------------------------------------------------------------
+// Scheduled: dispatchNotificationJobs
+// 24/7 polling, because quiet-hours logic already decides per-user awake windows
+// -----------------------------------------------------------------------------
 
 export const dispatchNotificationJobs = onSchedule(
-  { schedule: "*/15 6-23 * * *", timeZone: DEFAULT_TZ },
+  { region: FUNCTIONS_REGION, schedule: "*/15 * * * *", timeZone: DEFAULT_TZ },
   async () => {
     const nowTs = admin.firestore.Timestamp.now();
 
@@ -438,6 +1026,8 @@ export const dispatchNotificationJobs = onSchedule(
       .limit(50)
       .get();
 
+    if (jobsSnap.empty) return;
+
     for (const job of jobsSnap.docs) {
       const data = job.data();
       const uid = typeof data.uid === "string" ? data.uid : "";
@@ -446,10 +1036,10 @@ export const dispatchNotificationJobs = onSchedule(
         await job.ref.set(
           {
             status: "FAILED",
-            lastError: "Missing uid in job doc",
+            lastError: "Missing uid",
             sentAt: admin.firestore.FieldValue.serverTimestamp(),
           },
-          { merge: true },
+          { merge: true }
         );
         continue;
       }
@@ -464,13 +1054,10 @@ export const dispatchNotificationJobs = onSchedule(
               status: "NO_TOKENS",
               sentAt: admin.firestore.FieldValue.serverTimestamp(),
             },
-            { merge: true },
+            { merge: true }
           );
           continue;
         }
-
-        const intervalIndex = typeof data.intervalIndex === "number" ? String(data.intervalIndex) : "";
-        const dayKey = typeof data.dayKey === "string" ? data.dayKey : "";
 
         const res = await messaging.sendEachForMulticast({
           tokens,
@@ -480,8 +1067,8 @@ export const dispatchNotificationJobs = onSchedule(
           },
           data: {
             type: "REMINDER",
-            intervalIndex,
-            dayKey,
+            dayKey: typeof data.dayKey === "string" ? data.dayKey : "",
+            intervalIndex: typeof data.intervalIndex === "number" ? String(data.intervalIndex) : "",
           },
         });
 
@@ -489,12 +1076,7 @@ export const dispatchNotificationJobs = onSchedule(
         res.responses.forEach((r, idx) => {
           if (!r.success) {
             const code = (r.error as { code?: string } | undefined)?.code ?? "";
-            if (
-              code.includes("registration-token-not-registered") ||
-              code.includes("invalid-registration-token")
-            ) {
-              toDelete.push(tokens[idx]);
-            }
+            if (isTokenInvalid(code)) toDelete.push(tokens[idx]);
           }
         });
 
@@ -508,8 +1090,9 @@ export const dispatchNotificationJobs = onSchedule(
           {
             status: "SENT",
             sentAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastError: null,
           },
-          { merge: true },
+          { merge: true }
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -519,25 +1102,28 @@ export const dispatchNotificationJobs = onSchedule(
             lastError: msg,
             sentAt: admin.firestore.FieldValue.serverTimestamp(),
           },
-          { merge: true },
+          { merge: true }
         );
       }
     }
-  },
+  }
 );
 
-// -------------------- scheduled: monthly learning --------------------
+// -----------------------------------------------------------------------------
+// Scheduled: finalizeMonth
+// -----------------------------------------------------------------------------
 
 export const finalizeMonth = onSchedule(
-  { schedule: "10 0 1 * *", timeZone: DEFAULT_TZ },
+  { region: FUNCTIONS_REGION, schedule: "20 0 1 * *", timeZone: DEFAULT_TZ },
   async () => {
     const now = DateTime.now().setZone(DEFAULT_TZ);
     const lastMonthStart = now.minus({ months: 1 }).startOf("month");
     const lastMonthEnd = lastMonthStart.endOf("month");
 
-    logger.info(
-      `finalizeMonth: ${toDayKey(lastMonthStart)} -> ${toDayKey(lastMonthEnd)}`,
-    );
+    const startKey = toDayKey(lastMonthStart);
+    const endKey = toDayKey(lastMonthEnd);
+
+    logger.info(`finalizeMonth: ${startKey} -> ${endKey}`);
 
     const usersSnap = await db.collection("users").get();
 
@@ -550,44 +1136,48 @@ export const finalizeMonth = onSchedule(
 
       const sumsSnap = await db
         .collection(`users/${uid}/daily_summaries`)
-        .where(
-          "createdAt",
-          ">=",
-          admin.firestore.Timestamp.fromDate(lastMonthStart.toJSDate()),
-        )
-        .where(
-          "createdAt",
-          "<=",
-          admin.firestore.Timestamp.fromDate(lastMonthEnd.toJSDate()),
-        )
+        .where("dayKey", ">=", startKey)
+        .where("dayKey", "<=", endKey)
         .get();
 
-      sumsSnap.docs.forEach((d) => {
+      for (const d of sumsSnap.docs) {
         const s = d.data();
-        const b = s.bestInterval;
-        const w = s.worstInterval;
 
-        if (Number.isInteger(b) && b >= 0 && b <= 5) bestHist[b]++;
-        if (Number.isInteger(w) && w >= 0 && w <= 5) worstHist[w]++;
-      });
+        const b = normalizePreferredInterval(
+          s.bestInterval,
+          profile.quietHoursStartHour,
+          profile.quietHoursEndHour
+        );
 
-      const mode = (hist: number[]): number => {
-        let m = 0;
-        for (let i = 1; i < 6; i++) if (hist[i] > hist[m]) m = i;
-        return m;
+        const w = normalizePreferredInterval(
+          s.worstInterval,
+          profile.quietHoursStartHour,
+          profile.quietHoursEndHour
+        );
+
+        if (b != null) bestHist[b]++;
+        if (w != null) worstHist[w]++;
+      }
+
+      const mode = (hist: number[]): number | null => {
+        let chosen: number | null = null;
+        for (let i = 0; i < 6; i++) {
+          if (hist[i] <= 0) continue;
+          if (chosen == null || hist[i] > hist[chosen]) chosen = i;
+        }
+        return chosen;
       };
 
-      // Update only if we have enough days (avoid learning from too little data)
       if (sumsSnap.size >= 5) {
         await db.doc(`users/${uid}`).set(
           {
             preferredActiveInterval: mode(bestHist),
             preferredInactiveInterval: mode(worstHist),
-            timezone: profile.timezone,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
-          { merge: true },
+          { merge: true }
         );
       }
     }
-  },
+  }
 );
