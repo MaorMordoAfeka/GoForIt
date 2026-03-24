@@ -71,6 +71,12 @@ class StepService : Service() {
         private const val COLLEGE_SYNC_MAX_DELAY_MS = 15_000L
     }
 
+    @Volatile
+    private var lastFgsNotificationText: String? = null
+
+    @Volatile
+    private var lastResumeNotificationText: String? = null
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private lateinit var stepper: StepCounterZC
@@ -110,6 +116,8 @@ class StepService : Service() {
 
     /** Timestamp of the last attempt to sync college-area qualified steps */
     private var lastCollegeSyncAttemptMs = 0L
+
+    private var currentLocMinDistanceM: Float? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -151,6 +159,9 @@ class StepService : Service() {
         if (stepperStarted) {
             stepper.stop()
         }
+
+        lastFgsNotificationText = null
+        lastResumeNotificationText = null
 
         scope.cancel()
         super.onDestroy()
@@ -260,10 +271,15 @@ class StepService : Service() {
     }
 
     private fun showTapToResumeNotification() {
+        val text = "Open app to resume step counter"
+
+        if (lastResumeNotificationText == text) return
+        lastResumeNotificationText = text
+
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(
             NOTIF_ID_TAP_TO_RESUME,
-            buildTapToResumeNotif("Open app to resume step counter")
+            buildTapToResumeNotif(text)
         )
     }
 
@@ -436,13 +452,18 @@ class StepService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun startLocationUpdates(priority: Int, intervalMs: Long) {
+    private fun startLocationUpdates(
+        priority: Int,
+        intervalMs: Long,
+        minDistanceMeters: Float
+    ) {
         if (!hasLocPerm()) return
 
         if (
             locationRunning &&
             currentLocPriority == priority &&
-            currentLocIntervalMs == intervalMs
+            currentLocIntervalMs == intervalMs &&
+            currentLocMinDistanceM == minDistanceMeters
         ) {
             return
         }
@@ -451,13 +472,15 @@ class StepService : Service() {
 
         val req = LocationRequest.Builder(priority, intervalMs)
             .setMinUpdateIntervalMillis(intervalMs)
-            .setMinUpdateDistanceMeters(0f)
+            .setMinUpdateDistanceMeters(minDistanceMeters)
             .build()
 
         fused.requestLocationUpdates(req, locCallback, Looper.getMainLooper())
+
         locationRunning = true
         currentLocPriority = priority
         currentLocIntervalMs = intervalMs
+        currentLocMinDistanceM = minDistanceMeters
     }
 
     @SuppressLint("MissingPermission")
@@ -466,27 +489,58 @@ class StepService : Service() {
         restartLocationForMode(StepBus.mode.value)
     }
 
+    // TODO these gps settings were before:
+    //  high accuracy every 3s for DRIVING / CYCLING
+    //  balanced every 10s for RUNNING / WALKING
+    //  balanced every 15s for STATIONARY / STANDING_STILL
+    //  high accuracy every 5s in the fallback branch.
+    //  It also checks college-step eligibility with a max location age of 20 seconds
+    //  and max accuracy of 35 meters.
     private fun restartLocationForMode(mode: StepCounterZC.MotionMode) {
         when (mode) {
             StepCounterZC.MotionMode.DRIVING,
             StepCounterZC.MotionMode.CYCLING -> {
-                startLocationUpdates(Priority.PRIORITY_HIGH_ACCURACY, 3_000L)
+                startLocationUpdates(
+                    Priority.PRIORITY_HIGH_ACCURACY,
+                    6_000L, // was 3_000L
+                    minDistanceMeters = 15f
+                )
             }
 
             StepCounterZC.MotionMode.RUNNING,
             StepCounterZC.MotionMode.WALKING -> {
-                startLocationUpdates(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 10_000L)
+                startLocationUpdates(
+                    Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                    15_000L, // was 10_000L
+                    minDistanceMeters = 5f
+                )
             }
 
             StepCounterZC.MotionMode.STATIONARY,
             StepCounterZC.MotionMode.STANDING_STILL -> {
-                startLocationUpdates(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 15_000L)
+                startLocationUpdates(
+                    Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                    30_000L, // was 15_000L
+                    minDistanceMeters = 10f
+                )
             }
 
             else -> {
-                startLocationUpdates(Priority.PRIORITY_HIGH_ACCURACY, 5_000L)
+                startLocationUpdates(
+                    Priority.PRIORITY_HIGH_ACCURACY,
+                    8_000L, // was 5_000L
+                    minDistanceMeters = 8f
+                )
             }
         }
+    }
+
+    private fun stopLocationUpdates() {
+        fused.removeLocationUpdates(locCallback)
+        locationRunning = false
+        currentLocPriority = null
+        currentLocIntervalMs = null
+        currentLocMinDistanceM = null
     }
 
     private fun createNotifChannel() {
@@ -542,8 +596,12 @@ class StepService : Service() {
     }
 
     private fun updateNotificationForMode() {
-        val notification =
-            buildFgsNotif("Mode: ${StepBus.mode.value} • Steps: ${StepBus.steps.value}")
+        val text = "Mode: ${StepBus.mode.value} • Steps: ${StepBus.steps.value}"
+
+        if (lastFgsNotificationText == text) return
+        lastFgsNotificationText = text
+
+        val notification = buildFgsNotif(text)
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_ID_FGS, notification)
     }

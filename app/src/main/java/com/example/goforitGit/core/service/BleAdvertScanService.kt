@@ -77,13 +77,16 @@ class BleAdvertScanService : Service() {
     @Volatile
     private var lastToastAtMs: Long = 0L
 
+    @Volatile
+    private var lastNotificationText: String? = null
+
     private var btStateReceiver: BroadcastReceiver? = null
     private var userUnlockReceiver: BroadcastReceiver? = null
 
     // Scan tuning
     private val burstLowLatencyMs = 12_000L
-    private val watchdogPeriodMs = 15_000L
-    private val staleNoResultsMs = 20_000L
+    private val watchdogPeriodMs = 30_000L // was 15_000L
+    private val staleNoResultsMs = 45_000L // was 20_000L
 
     private val watchdog = object : Runnable {
         override fun run() {
@@ -174,6 +177,7 @@ class BleAdvertScanService : Service() {
         unregisterBtStateReceiver()
         unregisterUserUnlockReceiver()
         stopScanBestEffort()
+        lastNotificationText = null
         super.onDestroy()
     }
 
@@ -243,6 +247,9 @@ class BleAdvertScanService : Service() {
     }
 
     private fun updateBleNotification(text: String) {
+        if (lastNotificationText == text) return
+        lastNotificationText = text
+
         val nm = getSystemService(NotificationManager::class.java) ?: return
         runCatching { nm.notify(notifId, buildNotification(text)) }
     }
@@ -387,6 +394,14 @@ class BleAdvertScanService : Service() {
         }, burstLowLatencyMs)
     }
 
+    private fun buildScanFilters(): List<ScanFilter> {
+        return listOf(
+            ScanFilter.Builder()
+                .setManufacturerData(companyId, null)
+                .build()
+        )
+    }
+
     private fun startScanIfPermitted(mode: Int): Boolean {
         // Android 12+ requires BLUETOOTH_SCAN runtime permission
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -409,8 +424,7 @@ class BleAdvertScanService : Service() {
             .setReportDelay(0L)
             .build()
 
-        // Optional filters (keep empty by default)
-        val filters = mutableListOf<ScanFilter>()
+        val filters = buildScanFilters()
 
         return try {
             s.startScan(filters, settings, callback)
@@ -483,7 +497,7 @@ class BleAdvertScanService : Service() {
         // ble bonus station is recognized
         if (nameOk && msg == "bonus station") {
             text = "Device name: ${record.deviceName} \n" +
-                   "Msg: $msg"
+                    "Msg: $msg"
 
             // contact firebase and record the bonus station visit
             serviceScope.launch {
@@ -518,36 +532,50 @@ class BleAdvertScanService : Service() {
 
     private fun safeDeviceAddress(result: ScanResult): String {
         if (!hasBtConnectPermission()) return "unknown"
-        return runCatching { result.device.address }.getOrDefault("unknown")
+        return runCatching { result.device?.address ?: "unknown" }.getOrDefault("unknown")
     }
 
     private fun safeDeviceName(record: ScanRecord): String? {
-        if (!hasBtConnectPermission()) return null
+        // record.deviceName does not require BLUETOOTH_CONNECT
         return runCatching { record.deviceName }.getOrNull()
     }
 
     private fun toast(text: String) {
         mainHandler.post {
-            Toast.makeText(applicationContext, text, Toast.LENGTH_SHORT).show()
+            runCatching {
+                Toast.makeText(
+                    applicationContext,
+                    text,
+                    if (text.length > 80) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                ).show()
+            }
         }
     }
 
-    private fun stopSelfSafely(reason: String? = null) {
+    private fun stopSelfSafely(reason: String) {
         if (!stopRequested.compareAndSet(false, true)) return
+        Log.i(TAG, "Stopping service: $reason")
 
-        val msg = reason ?: "Stopping"
-        Log.i(TAG, "Stopping service safely. Reason: $msg")
-
-        // Best-effort: show the reason briefly via notification before removing foreground.
-        updateBleNotification("Stopped: $msg")
-
+        mainHandler.removeCallbacks(watchdog)
         stopScanBestEffort()
+        unregisterBtStateReceiver()
+        unregisterUserUnlockReceiver()
 
-        runCatching {
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopForegroundCompat()
+        stopSelfResult(max(lastStartId, 1))
+        stopSelf()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun stopForegroundCompat() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                stopForeground(true)
+            }
+        } catch (_: Throwable) {
         }
-
-        stopSelfResult(max(1, lastStartId))
     }
 
     // ---------------------------
@@ -567,7 +595,7 @@ class BleAdvertScanService : Service() {
 
             try {
                 ContextCompat.startForegroundService(context, i)
-            } catch (e: ForegroundServiceStartNotAllowedException) {
+            } catch (e: android.app.ForegroundServiceStartNotAllowedException) {
                 Log.w(TAG, "FGS start not allowed (boot/background).", e)
                 showResumeNotification(context, "Open app to resume BLE scanning")
             } catch (e: IllegalStateException) {
@@ -591,11 +619,7 @@ class BleAdvertScanService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (nm.getNotificationChannel("ble_resume") == null) {
                     nm.createNotificationChannel(
-                        NotificationChannel(
-                            "ble_resume",
-                            "BLE Resume",
-                            NotificationManager.IMPORTANCE_HIGH
-                        )
+                        NotificationChannel("ble_resume", "BLE Resume", NotificationManager.IMPORTANCE_HIGH)
                     )
                 }
             }
@@ -618,7 +642,7 @@ class BleAdvertScanService : Service() {
 
             nm.notify(
                 52043,
-                n.setSmallIcon(R.drawable.stat_sys_data_bluetooth)
+                n.setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                     .setContentTitle("BLE Scanner")
                     .setContentText(text)
                     .setContentIntent(pi)
