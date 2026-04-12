@@ -351,6 +351,9 @@ type UserDocData = {
   quietHoursStartHour: number;
   quietHoursEndHour: number;
   faculty: string;
+  cumulativeTotalPoints: number;
+  cumulativeTotalSteps: number;
+  cumulativeBonusPoints: number;
 };
 
 function buildUserDefaults(uid: string): Omit<UserDocData, "createdAt" | "updatedAt"> {
@@ -363,6 +366,9 @@ function buildUserDefaults(uid: string): Omit<UserDocData, "createdAt" | "update
     quietHoursStartHour: DEFAULT_QUIET_START_HOUR,
     quietHoursEndHour: DEFAULT_QUIET_END_HOUR,
     faculty: "",
+    cumulativeTotalPoints: 0,
+    cumulativeTotalSteps: 0,
+    cumulativeBonusPoints: 0,
   };
 }
 
@@ -404,6 +410,10 @@ async function ensureUserDoc(uid: string): Promise<void> {
 
     if (typeof data.faculty !== "string") patch.faculty = "";
 
+    if (typeof data.cumulativeTotalPoints !== "number") patch.cumulativeTotalPoints = 0;
+    if (typeof data.cumulativeTotalSteps !== "number") patch.cumulativeTotalSteps = 0;
+    if (typeof data.cumulativeBonusPoints !== "number") patch.cumulativeBonusPoints = 0;
+
     tx.set(userRef, patch, { merge: true });
   });
 }
@@ -416,6 +426,9 @@ async function getUserProfile(uid: string): Promise<{
   quietHoursStartHour: number;
   quietHoursEndHour: number;
   faculty: string;
+  cumulativeTotalPoints: number;
+  cumulativeTotalSteps: number;
+  cumulativeBonusPoints: number;
 }> {
   const snap = await db.doc(`users/${uid}`).get();
   const data = snap.data() ?? {};
@@ -441,6 +454,13 @@ async function getUserProfile(uid: string): Promise<{
 
   const faculty = typeof data.faculty === "string" ? data.faculty : "";
 
+  const cumulativeTotalPoints =
+    typeof data.cumulativeTotalPoints === "number" ? data.cumulativeTotalPoints : 0;
+  const cumulativeTotalSteps =
+    typeof data.cumulativeTotalSteps === "number" ? data.cumulativeTotalSteps : 0;
+  const cumulativeBonusPoints =
+    typeof data.cumulativeBonusPoints === "number" ? data.cumulativeBonusPoints : 0;
+
   return {
     timezone,
     lowActivityNudgeEnabled,
@@ -449,6 +469,9 @@ async function getUserProfile(uid: string): Promise<{
     quietHoursStartHour,
     quietHoursEndHour,
     faculty,
+    cumulativeTotalPoints,
+    cumulativeTotalSteps,
+    cumulativeBonusPoints,
   };
 }
 
@@ -633,6 +656,7 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
   const sessionId = `${dayKey}_${attributedIntervalIndex}`;
   const sessionRef = db.doc(`users/${uid}/step_sessions/${sessionId}`);
   const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
+  const userRef = db.doc(`users/${uid}`);
 
   const start = intervalStart(dayKey, attributedIntervalIndex, profile.timezone);
   const end = start.plus({ hours: 4 });
@@ -645,11 +669,19 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
       throw new HttpsError("failed-precondition", `Day ${dayKey} is finalized; uploads are blocked.`);
     }
 
-    const stepsByInterval = clampSix(daily.stepsByInterval);
+    // --- Compute OLD daily totals before mutation ---
+    const oldStepsByInterval = clampSix(daily.stepsByInterval);
+    const oldTotalSteps = oldStepsByInterval.reduce((a, b) => a + b, 0);
+    const oldBonusPoints = Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
+    const oldDailyPoints = calcStepPoints(oldTotalSteps) + oldBonusPoints;
+
+    // --- Mutate and compute NEW daily totals ---
+    const stepsByInterval = [...oldStepsByInterval];
     stepsByInterval[attributedIntervalIndex] = stepsTotal;
 
     const sumIntervals = stepsByInterval.reduce((a, b) => a + b, 0);
     const newTotalSteps = sumIntervals;
+    const newDailyPoints = calcStepPoints(newTotalSteps) + oldBonusPoints;
 
     const prevMask = Number.isInteger(daily.uploadedMask) ? (daily.uploadedMask as number) : 0;
     const newMask = prevMask | (1 << attributedIntervalIndex);
@@ -681,12 +713,28 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
         totalSteps: newTotalSteps,
         uploadedMask: newMask,
         didBonus: typeof daily.didBonus === "boolean" ? daily.didBonus : false,
-        bonusPoints: Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0,
+        bonusPoints: oldBonusPoints,
         isFinalized: false,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
+
+    // --- Increment cumulative totals on user doc by the delta ---
+    const pointsDelta = newDailyPoints - oldDailyPoints;
+    const stepsDelta = newTotalSteps - oldTotalSteps;
+
+    if (pointsDelta !== 0 || stepsDelta !== 0) {
+      tx.set(
+        userRef,
+        {
+          cumulativeTotalPoints: admin.firestore.FieldValue.increment(pointsDelta),
+          cumulativeTotalSteps: admin.firestore.FieldValue.increment(stepsDelta),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
   });
 
   let leaderboardRecalculated = false;
@@ -736,6 +784,7 @@ export const recordBonusVisit = onCall({ region: FUNCTIONS_REGION }, async (requ
 
   const visitRef = db.doc(`users/${uid}/bonus_visits/${dayKey}`);
   const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
+  const userRef = db.doc(`users/${uid}`);
 
   let awarded = false;
 
@@ -774,6 +823,19 @@ export const recordBonusVisit = onCall({ region: FUNCTIONS_REGION }, async (requ
       { merge: true }
     );
 
+    // --- Increment cumulative bonus & total points on user doc ---
+    if (pointsValue > 0) {
+      tx.set(
+        userRef,
+        {
+          cumulativeTotalPoints: admin.firestore.FieldValue.increment(pointsValue),
+          cumulativeBonusPoints: admin.firestore.FieldValue.increment(pointsValue),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
     awarded = true;
   });
 
@@ -807,6 +869,7 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
       : Date.now();
 
   const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
+  const userRef = db.doc(`users/${uid}`);
 
   let appliedDelta = 0;
   let acceptedQualifiedSteps = 0;
@@ -833,6 +896,8 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
     const collegeAreaBonusPoints =
       acceptedQualifiedSteps * COLLEGE_AREA_BONUS_POINTS_PER_STEP;
 
+    const bonusDelta = appliedDelta * COLLEGE_AREA_BONUS_POINTS_PER_STEP;
+
     tx.set(
       dailyRef,
       {
@@ -840,13 +905,26 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
         dayKey,
         collegeAreaQualifiedSteps: acceptedQualifiedSteps,
         collegeAreaBonusPoints,
-        bonusPoints: prevBonusPoints + appliedDelta * COLLEGE_AREA_BONUS_POINTS_PER_STEP,
+        bonusPoints: prevBonusPoints + bonusDelta,
         collegeAreaLastObservedAt: admin.firestore.Timestamp.fromMillis(observedAtMs),
         collegeAreaLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
+
+    // --- Increment cumulative bonus & total points on user doc ---
+    if (bonusDelta > 0) {
+      tx.set(
+        userRef,
+        {
+          cumulativeTotalPoints: admin.firestore.FieldValue.increment(bonusDelta),
+          cumulativeBonusPoints: admin.firestore.FieldValue.increment(bonusDelta),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
   });
 
   let leaderboardRecalculated = false;

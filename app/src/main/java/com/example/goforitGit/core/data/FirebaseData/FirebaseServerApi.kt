@@ -74,6 +74,9 @@ object FirebaseServerApi {
         val quietHoursStartHour: Int,
         val quietHoursEndHour: Int,
         val faculty: String,
+        val cumulativeTotalPoints: Int,
+        val cumulativeTotalSteps: Int,
+        val cumulativeBonusPoints: Int,
     )
 
     // -------------------------------------------------------------------------
@@ -162,6 +165,9 @@ object FirebaseServerApi {
             quietHoursEndHour = (map["quietHoursEndHour"] as? Number)?.toInt()
                 ?: DEFAULT_QUIET_HOURS_END,
             faculty = map["faculty"] as? String ?: "",
+            cumulativeTotalPoints = (map["cumulativeTotalPoints"] as? Number)?.toInt() ?: 0,
+            cumulativeTotalSteps = (map["cumulativeTotalSteps"] as? Number)?.toInt() ?: 0,
+            cumulativeBonusPoints = (map["cumulativeBonusPoints"] as? Number)?.toInt() ?: 0,
         )
     }
 
