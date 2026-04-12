@@ -105,6 +105,9 @@ class ProfileActivity : AppCompatActivity() {
             quietHoursStartHour = binding.sliderQuietStart.value.toInt(),
             quietHoursEndHour = binding.sliderQuietEnd.value.toInt(),
             faculty = faculty,
+            cumulativeTotalPoints = 0,
+            cumulativeTotalSteps = 0,
+            cumulativeBonusPoints = 0,
         )
 
         setBusy(true)
