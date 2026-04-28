@@ -96,6 +96,103 @@ class PoiRepository(
         }
     }
 
+    /**
+     * A single POI with its location and category bucket (0=parks, 1=residential, 2=busy).
+     */
+    data class PoiPoint(val lat: Double, val lon: Double, val bucket: Int)
+
+    /**
+     * Returns all POIs that fall inside any of the given H3 cells.
+     * Used to show on the map why the route was chosen.
+     */
+    fun getPoisInCells(h3Cells: Set<String>): List<PoiPoint> {
+        if (h3Cells.isEmpty()) return emptyList()
+        val out = ArrayList<PoiPoint>()
+
+        // For RESIDENTIAL only: expand the search area by 2 hex rings around
+        // each route cell. This gives many more purple dots on the visible
+        // route without affecting parks (green) or busy (yellow), which are
+        // still restricted to the exact route cells.
+        val residentialExpansionRings = 2
+        val expandedResidentialCells = HashSet<String>(h3Cells.size * 8)
+        for (cellStr in h3Cells) {
+            try {
+                val cellId = h3.stringToH3(cellStr)
+                val disk = h3.gridDisk(cellId, residentialExpansionRings)
+                for (idx in disk) {
+                    expandedResidentialCells.add(h3.h3ToString(idx))
+                }
+            } catch (_: Throwable) {
+                // Fallback: keep the original cell if anything goes wrong
+                expandedResidentialCells.add(cellStr)
+            }
+        }
+
+        when (mode) {
+            Mode.H3_TABLE -> {
+                val d = db ?: return out
+                // Query with the expanded set so residential POIs from a wider area can be considered
+                val queryCells = expandedResidentialCells
+                val placeholders = queryCells.joinToString(",") { "?" }
+                val sql = "SELECT $colH3, $colCat FROM $tableName WHERE $colH3 IN ($placeholders)"
+                try {
+                    d.rawQuery(sql, queryCells.toTypedArray()).use { c ->
+                        while (c.moveToNext()) {
+                            val cellStr = c.getString(0) ?: continue
+                            val catVal  = c.getString(1) ?: continue
+                            val bucket  = catVal.toIntOrNull() ?: (bucketOf(catVal) ?: continue)
+
+                            // Filter: parks (0) and busy (2) must be in the original route cells.
+                            // Residential (1) can come from the expanded set.
+                            if (bucket != 1 && cellStr !in h3Cells) continue
+
+                            val cellId = h3.stringToH3(cellStr)
+                            val ll     = h3.cellToLatLng(cellId)
+                            out.add(PoiPoint(ll.lat, ll.lng, bucket))
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "getPoisInCells H3_TABLE failed.", t)
+                }
+            }
+
+            Mode.LATLON_TABLE -> {
+                val d = db ?: return out
+                val sql = "SELECT $colLat, $colLon, $colType FROM $tableName"
+                try {
+                    d.rawQuery(sql, null).use { c ->
+                        while (c.moveToNext()) {
+                            val lat  = c.getDouble(0)
+                            val lon  = c.getDouble(1)
+                            val type = c.getString(2) ?: continue
+                            val bucket = bucketOf(type) ?: continue
+
+                            val cellStr = h3.h3ToString(h3.latLngToCell(lat, lon, h3Res))
+
+                            // Residential: include if in the expanded set.
+                            // Other categories: include only if in the original route cells.
+                            val include = if (bucket == 1) {
+                                cellStr in expandedResidentialCells
+                            } else {
+                                cellStr in h3Cells
+                            }
+
+                            if (include) {
+                                out.add(PoiPoint(lat, lon, bucket))
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "getPoisInCells LATLON_TABLE failed.", t)
+                }
+            }
+
+            Mode.EMPTY -> { /* nothing */ }
+        }
+
+        return out
+    }
+
     private fun initSchemaAndMaybeBuildIndex() {
         val d = db
         if (d == null) {
@@ -132,7 +229,6 @@ class PoiRepository(
             val lon = cols.firstOrNull { it.equals("lon", true) || it.equals("lng", true) || it.equals("longitude", true) }
             if (lat == null || lon == null) continue
 
-            // Look for ANY column that might contain type info
             val type = cols.firstOrNull {
                 it.equals("type", true) ||
                         it.equals("category", true) ||
@@ -144,7 +240,7 @@ class PoiRepository(
                         it.equals("leisure", true) ||
                         it.equals("landuse", true) ||
                         it.equals("natural", true) ||
-                        it.equals("fclass", true)  // Common in OSM exports
+                        it.equals("fclass", true)
             } ?: continue
 
             mode = Mode.LATLON_TABLE
@@ -170,7 +266,6 @@ class PoiRepository(
         var rows = 0
         var kept = 0
 
-        // Track unique types for debugging
         val uniqueTypes = HashSet<String>()
 
         try {
@@ -182,7 +277,6 @@ class PoiRepository(
                     val lon = c.getDouble(1)
                     val type = c.getString(2)
 
-                    // Log first 100 unique types for debugging
                     if (uniqueTypes.size < 100 && type != null) {
                         uniqueTypes.add(type)
                     }
@@ -224,7 +318,6 @@ class PoiRepository(
         val s = raw.lowercase(Locale.US).trim()
 
         // ============ BUCKET 0: Parks / Green Spaces / Nature ============
-        // Direct matches (exact values)
         val parkExact = setOf(
             "park", "parks", "garden", "gardens", "forest", "wood", "woods",
             "beach", "beaches", "nature", "nature_reserve", "national_park",
@@ -237,7 +330,6 @@ class PoiRepository(
         )
         if (s in parkExact) return 0
 
-        // Substring matches for parks
         val parkContains = listOf(
             "park", "beach", "forest", "nature", "garden", "wood", "green",
             "grass", "meadow", "recreation", "leisure", "playground",
@@ -249,7 +341,6 @@ class PoiRepository(
             if (s.contains(keyword)) return 0
         }
 
-        // OSM leisure values that are green/recreational
         if (s.startsWith("leisure=") || s.startsWith("landuse=") || s.startsWith("natural=")) {
             val value = s.substringAfter("=")
             if (value in parkExact || parkContains.any { value.contains(it) }) return 0
@@ -257,17 +348,35 @@ class PoiRepository(
 
         // ============ BUCKET 1: Residential ============
         val residentialExact = setOf(
+            // Building types
             "residential", "apartments", "apartment", "house", "houses",
-            "detached", "semi-detached", "terrace", "dormitory", "hostel",
-            "hotel", "motel", "guest_house", "housing", "dwelling",
+            "detached", "semi-detached", "terrace", "terrace_house", "dormitory",
+            "hostel", "hotel", "motel", "guest_house", "housing", "dwelling",
+            "bungalow", "cabin", "chalet", "static_caravan", "houseboat",
+            "flats", "flat", "condominium", "condo", "duplex", "studio",
+            "maisonette", "villa", "manor", "retirement_home", "care_home",
+            "sheltered_housing", "social_housing", "public_housing",
+            // Land use / area types
             "neighbourhood", "neighborhood", "suburb", "village",
-            "hamlet", "town", "city", "quarter", "block"
+            "hamlet", "town", "city", "quarter", "block", "urban",
+            "housing_estate", "estate", "complex", "compound",
+            "garages", "garage", "allotment", "allotments",
+            // Street / infrastructure context
+            "living_street", "pedestrian", "footway", "path",
+            "cycleway", "service", "unclassified",
+            // Hebrew/Israeli OSM common tags
+            "shikun", "shchuna", "kiryat", "ramat", "givat", "tel",
+            "building", "buildings", "structure"
         )
         if (s in residentialExact) return 1
 
         val residentialContains = listOf(
             "residential", "apartment", "housing", "neighbourhood", "neighborhood",
-            "dwelling", "home", "suburb", "village", "hamlet"
+            "dwelling", "home", "suburb", "village", "hamlet",
+            "estate", "quarter", "bungalow", "villa", "flat", "condo",
+            "living_street", "shikun", "shchuna", "kiryat", "ramat",
+            "building", "house", "hostel", "dormitory", "shelter",
+            "urban", "block", "complex", "compound"
         )
         for (keyword in residentialContains) {
             if (s.contains(keyword)) return 1
@@ -298,18 +407,13 @@ class PoiRepository(
             if (s.contains(keyword)) return 2
         }
 
-        // Not classified
         return null
     }
 
-    /**
-     * Log database statistics for debugging
-     */
     private fun logDatabaseStats() {
         val d = db ?: return
 
         try {
-            // Count total rows
             val countCursor = d.rawQuery("SELECT COUNT(*) FROM $tableName", null)
             countCursor.use {
                 if (it.moveToFirst()) {
@@ -317,7 +421,6 @@ class PoiRepository(
                 }
             }
 
-            // Get distinct types (top 30)
             if (colType.isNotEmpty()) {
                 val typesCursor = d.rawQuery(
                     "SELECT DISTINCT $colType, COUNT(*) as cnt FROM $tableName GROUP BY $colType ORDER BY cnt DESC LIMIT 30",

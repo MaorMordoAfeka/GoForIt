@@ -10,18 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Optional: small button to open/close the sheet -->
-    <com.google.android.material.floatingactionbutton.FloatingActionButton
-        android:id="@+id/fabMenu"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_margin="16dp"
-        android:contentDescription="Route options"
-        app:srcCompat="@android:drawable/ic_menu_sort_by_size"
-        app:layout_anchor="@id/mapView"
-        app:layout_anchorGravity="bottom|end" />
-
-    <!-- Bottom sheet slider (your current menu moved here) -->
+    <!-- Bottom sheet -->
     <androidx.core.widget.NestedScrollView
         android:id="@+id/routeSheet"
         android:layout_width="match_parent"
@@ -30,7 +19,7 @@
         android:padding="12dp"
         android:background="#CC000000"
         app:layout_behavior="com.google.android.material.bottomsheet.BottomSheetBehavior"
-        app:behavior_peekHeight="84dp"
+        app:behavior_peekHeight="160dp"
         app:behavior_hideable="false"
         app:behavior_fitToContents="false"
         app:behavior_halfExpandedRatio="0.45">
@@ -47,6 +36,47 @@
                 android:layout_gravity="center_horizontal"
                 android:layout_marginBottom="12dp"
                 android:background="#66FFFFFF" />
+
+            <!-- Row 1: Show H3 + Clear -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="6dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnShowH3"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="4dp"
+                    android:text="Show H3 Hexagons"
+                    android:textSize="11sp"
+                    app:backgroundTint="#3F51B5"
+                    style="@style/Widget.MaterialComponents.Button" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnClearH3"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Clear Overlays"
+                    android:textSize="11sp"
+                    app:backgroundTint="#757575"
+                    style="@style/Widget.MaterialComponents.Button" />
+
+            </LinearLayout>
+
+            <!-- Row 2: Show POIs -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnShowPoi"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:text="Show POIs (route reason)"
+                android:textSize="11sp"
+                app:backgroundTint="#00897B"
+                style="@style/Widget.MaterialComponents.Button" />
 
             <!-- Start -->
             <com.google.android.material.textfield.TextInputLayout
@@ -166,5 +196,16 @@
 
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>
+
+    <!-- FAB -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabMenu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:contentDescription="Route options"
+        app:srcCompat="@android:drawable/ic_menu_sort_by_size"
+        app:layout_anchor="@id/mapView"
+        app:layout_anchorGravity="bottom|end" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

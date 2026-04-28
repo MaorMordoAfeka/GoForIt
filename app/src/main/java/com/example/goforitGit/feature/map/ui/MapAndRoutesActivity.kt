@@ -32,15 +32,25 @@ import org.maplibre.android.style.layers.FillExtrusionLayer
 import org.maplibre.android.style.layers.PropertyFactory.*
 import org.maplibre.android.style.expressions.Expression.*
 import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.FillLayer
+import com.uber.h3core.H3Core
 
 
 class MapAndRoutesActivity : AppCompatActivity() {
-
 
     private val startSourceId = "start-source"
     private val destSourceId  = "dest-source"
     private val startLayerId  = "start-layer"
     private val destLayerId   = "dest-layer"
+
+    // H3 hexagon overlay
+    private val h3SourceId       = "h3-hexagons-source"
+    private val h3LayerId        = "h3-hexagons-layer"
+    private val h3OutlineLayerId = "h3-hexagons-outline-layer"
+
+    // POI overlay
+    private val poiSourceId  = "poi-source"
+    private val poiLayerId   = "poi-layer"
 
     private val emptyFC = """{"type":"FeatureCollection","features":[]}"""
 
@@ -57,15 +67,13 @@ class MapAndRoutesActivity : AppCompatActivity() {
     }
 
     private fun ensurePinLayers(style: Style) {
-        // Sources
         if (style.getSource(startSourceId) == null) style.addSource(GeoJsonSource(startSourceId, emptyFC))
         if (style.getSource(destSourceId)  == null) style.addSource(GeoJsonSource(destSourceId,  emptyFC))
 
-        // Start = RED
         if (style.getLayer(startLayerId) == null) {
             style.addLayer(
                 CircleLayer(startLayerId, startSourceId).withProperties(
-                    circleColor(Color.parseColor("#E53935")),  // red
+                    circleColor(Color.parseColor("#E53935")),
                     circleRadius(8f),
                     circleStrokeColor(Color.WHITE),
                     circleStrokeWidth(2f),
@@ -74,11 +82,10 @@ class MapAndRoutesActivity : AppCompatActivity() {
             )
         }
 
-        // Destination = GREEN
         if (style.getLayer(destLayerId) == null) {
             style.addLayer(
                 CircleLayer(destLayerId, destSourceId).withProperties(
-                    circleColor(Color.parseColor("#43A047")),  // green
+                    circleColor(Color.parseColor("#43A047")),
                     circleRadius(8f),
                     circleStrokeColor(Color.WHITE),
                     circleStrokeWidth(2f),
@@ -106,11 +113,15 @@ class MapAndRoutesActivity : AppCompatActivity() {
     private lateinit var btnPlan: MaterialButton
     private lateinit var tvHint: TextView
 
+    private lateinit var btnShowH3: MaterialButton
+    private lateinit var btnClearH3: MaterialButton
+    private lateinit var btnShowPoi: MaterialButton
+
     private var startPoint: LatLng? = null
     private var destPoint: LatLng? = null
 
-    private val routeSourceId = "route-source"
-    private val routeLayerId = "route-layer"
+    private val routeSourceId    = "route-source"
+    private val routeLayerId     = "route-layer"
     private val building3dLayerId = "building-3d-layer"
 
     private var mapStyle: Style? = null
@@ -122,15 +133,17 @@ class MapAndRoutesActivity : AppCompatActivity() {
         MapLibre.getInstance(this)
         setContentView(R.layout.feature_map_activity)
 
-        // UI
-        etStart = findViewById(R.id.etStart)
-        etDest = findViewById(R.id.etDest)
-        sParks = findViewById(R.id.sParks)
+        etStart      = findViewById(R.id.etStart)
+        etDest       = findViewById(R.id.etDest)
+        sParks       = findViewById(R.id.sParks)
         sResidential = findViewById(R.id.sResidential)
-        sBusy = findViewById(R.id.sBusy)
-        sDistanceKm = findViewById(R.id.sDistanceKm)
-        btnPlan = findViewById(R.id.btnPlan)
-        tvHint = findViewById(R.id.tvHint)
+        sBusy        = findViewById(R.id.sBusy)
+        sDistanceKm  = findViewById(R.id.sDistanceKm)
+        btnPlan      = findViewById(R.id.btnPlan)
+        tvHint       = findViewById(R.id.tvHint)
+        btnShowH3    = findViewById(R.id.btnShowH3)
+        btnClearH3   = findViewById(R.id.btnClearH3)
+        btnShowPoi   = findViewById(R.id.btnShowPoi)
 
         val sheet = findViewById<View>(R.id.routeSheet)
         sheetBehavior = BottomSheetBehavior.from(sheet).apply {
@@ -143,24 +156,48 @@ class MapAndRoutesActivity : AppCompatActivity() {
         val fabMenu = findViewById<FloatingActionButton>(R.id.fabMenu)
         fabMenu.setOnClickListener {
             sheetBehavior.state = when (sheetBehavior.state) {
-                BottomSheetBehavior.STATE_EXPANDED -> BottomSheetBehavior.STATE_COLLAPSED
+                BottomSheetBehavior.STATE_EXPANDED      -> BottomSheetBehavior.STATE_COLLAPSED
                 BottomSheetBehavior.STATE_HALF_EXPANDED -> BottomSheetBehavior.STATE_COLLAPSED
                 else -> BottomSheetBehavior.STATE_HALF_EXPANDED
             }
         }
 
-        // Tiles server (offline MBTiles)
         tileServer = MbTilesServer(this)
         val ok = tileServer.startServerSafely()
         if (!ok) tvHint.text = "Tile server failed (Logcat: MbTilesServer)."
 
-        // Router init
         offlineRouter = OfflineRouter(this)
         offlineRouter.initAsync { success, msg ->
             runOnUiThread { tvHint.text = msg }
         }
 
-        // Map
+        // --- H3 button listeners ---
+        btnShowH3.setOnClickListener {
+            val style = mapStyle ?: run { tvHint.text = "Map not ready yet."; return@setOnClickListener }
+            val cells = offlineRouter.lastRouteCells
+            if (cells.isEmpty()) { tvHint.text = "Plan a route first, then show hexagons."; return@setOnClickListener }
+            showH3Hexagons(style, cells)
+            tvHint.text = "Showing ${cells.size} H3 hexagons on route."
+        }
+
+        btnClearH3.setOnClickListener {
+            val style = mapStyle ?: return@setOnClickListener
+            style.getSourceAs<GeoJsonSource>(h3SourceId)?.setGeoJson(emptyFC)
+            style.getSourceAs<GeoJsonSource>(poiSourceId)?.setGeoJson(emptyFC)
+            tvHint.text = "Hexagons and POIs cleared."
+        }
+
+        // --- POI button listener ---
+        btnShowPoi.setOnClickListener {
+            val style = mapStyle ?: run { tvHint.text = "Map not ready yet."; return@setOnClickListener }
+            val cells = offlineRouter.lastRouteCells
+            if (cells.isEmpty()) { tvHint.text = "Plan a route first, then show POIs."; return@setOnClickListener }
+            val repo = offlineRouter.getPoiRepository()
+            val h3   = offlineRouter.getH3()
+            if (repo == null || h3 == null) { tvHint.text = "Router not ready yet."; return@setOnClickListener }
+            showPois(style, cells, repo, h3)
+        }
+
         mapView = findViewById(R.id.mapView)
         mapView.onCreate(savedInstanceState)
 
@@ -170,28 +207,26 @@ class MapAndRoutesActivity : AppCompatActivity() {
 
                 ensurePinLayers(style)
                 updatePins(style)
+                ensureH3Layers(style)
+                ensurePoiLayer(style)
 
-                // 3D camera with tilt (pitch) for building extrusion
                 map.cameraPosition = CameraPosition.Builder()
-                    .target(LatLng(32.0853, 34.7818))  // Tel Aviv
-                    .zoom(15.5)                         // Closer zoom to see 3D buildings
-                    .tilt(50.0)                         // Increased tilt for better 3D effect
-                    .bearing(15.0)                      // Slight rotation for depth
+                    .target(LatLng(32.0853, 34.7818))
+                    .zoom(15.5)
+                    .tilt(50.0)
+                    .bearing(15.0)
                     .build()
 
-                // Add 3D buildings layer programmatically (if not in style)
                 add3DBuildingsLayer(style)
 
-                // Add route source if not in style
                 if (style.getSource(routeSourceId) == null) {
                     style.addSource(GeoJsonSource(routeSourceId))
                 }
 
-                // Route layer - check if already defined in style
                 if (style.getLayer(routeLayerId) == null) {
                     style.addLayer(
                         LineLayer(routeLayerId, routeSourceId).withProperties(
-                            lineColor(Color.parseColor("#e91e63")),  // Pink/magenta route
+                            lineColor(Color.parseColor("#202491")),
                             lineWidth(6f),
                             lineOpacity(0.9f),
                             lineJoin(Property.LINE_JOIN_ROUND),
@@ -200,7 +235,6 @@ class MapAndRoutesActivity : AppCompatActivity() {
                     )
                 }
 
-                // Tap to set Start then Destination
                 map.addOnMapClickListener { latLng ->
                     if (startPoint == null || destPoint != null) {
                         startPoint = latLng
@@ -214,36 +248,27 @@ class MapAndRoutesActivity : AppCompatActivity() {
                         etDest.setText("${latLng.latitude},${latLng.longitude}")
                         tvHint.text = "Destination set. Press Plan Route."
                     }
-
                     mapStyle?.let { updatePins(it) }
-
                     sheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
                     true
                 }
 
                 btnPlan.setOnClickListener {
-                    val styleNow = mapStyle ?: run {
-                        tvHint.text = "Map style not ready yet."
-                        return@setOnClickListener
-                    }
+                    val styleNow = mapStyle ?: run { tvHint.text = "Map style not ready yet."; return@setOnClickListener }
 
                     if (!offlineRouter.isReady()) {
                         tvHint.text = "Router not ready yet (still loading POIs/H3)."
                         return@setOnClickListener
                     }
 
-                    // allow manual lat,lon edit
                     startPoint = parseLatLng(etStart.text?.toString()) ?: startPoint
-                    destPoint = parseLatLng(etDest.text?.toString()) ?: destPoint
+                    destPoint  = parseLatLng(etDest.text?.toString())  ?: destPoint
 
-                    updatePins(styleNow) // ✅ NEW: show pins immediately after manual input
+                    updatePins(styleNow)
 
                     val a = startPoint
                     val b = destPoint
-                    if (a == null || b == null) {
-                        tvHint.text = "Please set Start and Destination."
-                        return@setOnClickListener
-                    }
+                    if (a == null || b == null) { tvHint.text = "Please set Start and Destination."; return@setOnClickListener }
 
                     if (!IsraelBounds.contains(a) || !IsraelBounds.contains(b)) {
                         tvHint.text = "Start/Destination must be inside Israel bounds."
@@ -252,23 +277,23 @@ class MapAndRoutesActivity : AppCompatActivity() {
                     }
 
                     val prefs = RoutePrefs(
-                        parks = sParks.value,
+                        parks       = sParks.value,
                         residential = sResidential.value,
-                        busy = sBusy.value,
-                        maxKm = sDistanceKm.value
+                        busy        = sBusy.value,
+                        maxKm       = sDistanceKm.value
                     )
 
                     tvHint.text = "Routing (H3 + POI detours)..."
 
+                    // Clear old overlays when planning a new route
+                    styleNow.getSourceAs<GeoJsonSource>(h3SourceId)?.setGeoJson(emptyFC)
+                    styleNow.getSourceAs<GeoJsonSource>(poiSourceId)?.setGeoJson(emptyFC)
+
                     offlineRouter.routeAsync(a, b, prefs) { ok2, msg2, points, _ ->
                         runOnUiThread {
                             tvHint.text = msg2
-                            if (!ok2) {
-                                clearRoute(styleNow)
-                                return@runOnUiThread
-                            }
-                            styleNow.getSourceAs<GeoJsonSource>(routeSourceId)
-                                ?.setGeoJson(lineGeoJson(points))
+                            if (!ok2) { clearRoute(styleNow); return@runOnUiThread }
+                            styleNow.getSourceAs<GeoJsonSource>(routeSourceId)?.setGeoJson(lineGeoJson(points))
                         }
                     }
                 }
@@ -276,25 +301,131 @@ class MapAndRoutesActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Add 3D building extrusion layer programmatically.
-     * This creates colorful 3D buildings based on their height.
-     */
-    private fun add3DBuildingsLayer(style: Style) {
-        val sourceId = "local" // must match the source id in your style json
-        val layerId = "buildings-3d"
+    // -----------------------------------------------------------------------
+    // H3 hexagon helpers
+    // -----------------------------------------------------------------------
 
-        // Remove previous instance if you hot-reload style or re-enter activity
+    private fun ensureH3Layers(style: Style) {
+        if (style.getSource(h3SourceId) == null) {
+            style.addSource(GeoJsonSource(h3SourceId, emptyFC))
+        }
+        if (style.getLayer(h3LayerId) == null) {
+            style.addLayer(
+                FillLayer(h3LayerId, h3SourceId).withProperties(
+                    fillColor(Color.parseColor("#3F51B5")),
+                    fillOpacity(0.25f)
+                )
+            )
+        }
+        if (style.getLayer(h3OutlineLayerId) == null) {
+            style.addLayer(
+                LineLayer(h3OutlineLayerId, h3SourceId).withProperties(
+                    lineColor(Color.parseColor("#3F51B5")),
+                    lineWidth(1.5f),
+                    lineOpacity(0.75f)
+                )
+            )
+        }
+    }
+
+    private fun showH3Hexagons(style: Style, cells: List<Long>) {
+        Thread {
+            val geoJson = try {
+                val h3Core = H3Core.newSystemInstance()
+                val features = cells.mapNotNull { cell ->
+                    try {
+                        val boundary = h3Core.cellToBoundary(cell)
+                        if (boundary.isEmpty()) return@mapNotNull null
+                        val coords = boundary.joinToString(",") { v -> "[${v.lng},${v.lat}]" }
+                        val first = boundary.first()
+                        """{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[${coords},[${first.lng},${first.lat}]]]}}"""
+                    } catch (_: Throwable) { null }
+                }
+                """{"type":"FeatureCollection","features":[${features.joinToString(",")}]}"""
+            } catch (t: Throwable) {
+                runOnUiThread { tvHint.text = "H3 init failed: ${t.message}" }
+                return@Thread
+            }
+            runOnUiThread { style.getSourceAs<GeoJsonSource>(h3SourceId)?.setGeoJson(geoJson) }
+        }.start()
+    }
+
+    // -----------------------------------------------------------------------
+    // POI helpers
+    // -----------------------------------------------------------------------
+
+    private fun ensurePoiLayer(style: Style) {
+        if (style.getSource(poiSourceId) == null) {
+            style.addSource(GeoJsonSource(poiSourceId, emptyFC))
+        }
+        // One circle layer; colour is stored as a GeoJSON property "color"
+        if (style.getLayer(poiLayerId) == null) {
+            style.addLayer(
+                CircleLayer(poiLayerId, poiSourceId).withProperties(
+                    circleColor(get("color")),
+                    circleRadius(6f),
+                    circleStrokeColor(Color.WHITE),
+                    circleStrokeWidth(1.5f),
+                    circleOpacity(0.9f)
+                )
+            )
+        }
+    }
+
+    /**
+     * Loads POIs for the route cells on a background thread and draws them as
+     * colour-coded dots:
+     *   Green  = Parks / nature  (preference: Parks slider)
+     *   Blue   = Residential     (preference: Residential slider)
+     *   Orange = Busy / shops    (preference: Busy slider)
+     */
+    private fun showPois(
+        style: Style,
+        cells: List<Long>,
+        repo: com.example.goforitGit.feature.map.data.PoiRepository,
+        h3Core: H3Core
+    ) {
+        tvHint.text = "Loading POIs…"
+        Thread {
+            val cellStrings = cells.map { h3Core.h3ToString(it) }.toSet()
+            val pois = repo.getPoisInCells(cellStrings)
+
+            val features = pois.map { poi ->
+                val color = when (poi.bucket) {
+                    0    -> "#4CAF50"   // green  — parks/beaches
+                    1    -> "#9C27B0"   // purple — residential
+                    else -> "#FFEB3B"   // yellow — busy/shops
+                }
+                """{"type":"Feature","properties":{"color":"$color"},"geometry":{"type":"Point","coordinates":[${poi.lon},${poi.lat}]}}"""
+            }
+
+            val geoJson = """{"type":"FeatureCollection","features":[${features.joinToString(",")}]}"""
+
+            runOnUiThread {
+                style.getSourceAs<GeoJsonSource>(poiSourceId)?.setGeoJson(geoJson)
+                if (pois.isEmpty()) {
+                    tvHint.text = "No POIs found along this route."
+                } else {
+                    val parks = pois.count { it.bucket == 0 }
+                    val res   = pois.count { it.bucket == 1 }
+                    val busy  = pois.count { it.bucket == 2 }
+                    tvHint.text = "POIs: ${parks} parks (green), ${res} residential (purple), ${busy} busy (yellow)"
+                }
+            }
+        }.start()
+    }
+
+    // -----------------------------------------------------------------------
+
+    private fun add3DBuildingsLayer(style: Style) {
+        val sourceId = "local"
+        val layerId  = "buildings-3d"
+
         style.getLayer(layerId)?.let { style.removeLayer(it) }
 
         val layer = FillExtrusionLayer(layerId, sourceId).apply {
-            // IMPORTANT: your MBTiles schema uses "buildings" (plural), not "building"
             sourceLayer = "buildings"
-
-            // Show only when buildings exist and 3D makes sense
             minZoom = 14f
-
-            // For now, use a zoom-based constant height so you DEFINITELY see 3D.
             setProperties(
                 fillExtrusionColor(Color.parseColor("#d7ccc8")),
                 fillExtrusionOpacity(0.88f),
@@ -310,8 +441,7 @@ class MapAndRoutesActivity : AppCompatActivity() {
             )
         }
 
-        // Place 3D buildings above base building fill (if exists) but below labels if you add them later.
-        val belowLayerId = "streets" // change if your style uses a different line layer id
+        val belowLayerId = "streets"
         if (style.getLayer(belowLayerId) != null) {
             style.addLayerBelow(layer, belowLayerId)
         } else {
@@ -343,10 +473,10 @@ class MapAndRoutesActivity : AppCompatActivity() {
             ?.setGeoJson("""{"type":"FeatureCollection","features":[]}""")
     }
 
-    override fun onStart() { super.onStart(); mapView.onStart() }
-    override fun onResume() { super.onResume(); mapView.onResume() }
-    override fun onPause() { mapView.onPause(); super.onPause() }
-    override fun onStop() { super.onStop(); mapView.onStop() }
+    override fun onStart()    { super.onStart();    mapView.onStart()  }
+    override fun onResume()   { super.onResume();   mapView.onResume() }
+    override fun onPause()    { mapView.onPause();  super.onPause()    }
+    override fun onStop()     { super.onStop();     mapView.onStop()   }
 
     override fun onDestroy() {
         mapView.onDestroy()

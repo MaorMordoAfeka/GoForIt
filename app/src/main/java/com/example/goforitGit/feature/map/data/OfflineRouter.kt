@@ -59,6 +59,26 @@ class OfflineRouter(private val ctx: Context) {
     private val acceptGapSmallMeters = 300.0
     private val acceptGapLargeMeters = 600.0
 
+    /**
+     * The H3 cells (at resolution 10) that were covered by the last successful route.
+     * Populated at the end of routeAsync. Empty if no route has been computed yet.
+     */
+    @Volatile
+    var lastRouteCells: List<Long> = emptyList()
+        private set
+
+    /**
+     * Exposes the POI repository so the UI can query POIs along the route.
+     * Null until initAsync completes.
+     */
+    fun getPoiRepository(): PoiRepository? = poiRepo
+
+    /**
+     * Exposes the H3Core instance so the UI can convert cell IDs to strings.
+     * Null until initAsync completes.
+     */
+    fun getH3(): H3Core? = h3
+
     fun isReady(): Boolean = ready.get()
 
     fun initAsync(onDone: (Boolean, String) -> Unit) {
@@ -126,6 +146,7 @@ class OfflineRouter(private val ctx: Context) {
 
                 // If extra is basically zero, return direct
                 if (extraMeters <= 25.0) {
+                    lastRouteCells = extractRouteCells(h3i, direct.points)
                     onResult(
                         true,
                         "OK ~${"%.2f".format(direct.meters / 1000.0)} km (direct)",
@@ -174,6 +195,7 @@ class OfflineRouter(private val ctx: Context) {
                     best1.meters >= minMeters &&
                     abs(best1.meters - targetMeters) <= acceptGapMeters
                 ) {
+                    lastRouteCells = extractRouteCells(h3i, best1.points)
                     onResult(
                         true,
                         "OK ~${"%.2f".format(best1.meters / 1000.0)} km (prefs+budget)",
@@ -207,6 +229,7 @@ class OfflineRouter(private val ctx: Context) {
                     best2.meters >= minMeters &&
                     abs(best2.meters - targetMeters) <= acceptGapMeters
                 ) {
+                    lastRouteCells = extractRouteCells(h3i, best2.points)
                     onResult(
                         true,
                         "OK ~${"%.2f".format(best2.meters / 1000.0)} km (prefs+budget)",
@@ -238,6 +261,7 @@ class OfflineRouter(private val ctx: Context) {
 
                 Log.d(TAG, "=== ROUTING DONE === Final: ${"%.0f".format(best.meters)}m")
 
+                lastRouteCells = extractRouteCells(h3i, best.points)
                 onResult(
                     true,
                     "OK ~${"%.2f".format(best.meters / 1000.0)} km (prefs+budget)",
@@ -250,6 +274,20 @@ class OfflineRouter(private val ctx: Context) {
                 onResult(false, "Crash: ${t.message}", emptyList(), 0.0)
             }
         }
+    }
+
+    /**
+     * Derives the unique set of H3 cells (at h3Res) that the given route points pass through.
+     * Samples every point, converts to an H3 cell, and deduplicates.
+     */
+    private fun extractRouteCells(h3i: H3Core, points: List<LatLng>): List<Long> {
+        if (points.isEmpty()) return emptyList()
+        val seen = LinkedHashSet<Long>()
+        for (p in points) {
+            val cell = h3i.latLngToCell(p.latitude, p.longitude, h3Res)
+            seen.add(cell)
+        }
+        return seen.toList()
     }
 
     // ----------------------------

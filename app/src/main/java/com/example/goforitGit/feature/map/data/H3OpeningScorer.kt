@@ -13,9 +13,9 @@ class H3OpeningScorer(
     private val h3: H3Core,
     private val poiRepo: PoiRepository,
     private val h3Res: Int,
-    private val diskRadiusForPoi: Int = 2,
-    private val candidateDiskRadius: Int = 2,
-    private val openingHalfAngleDeg: Double = 120.0
+    private val diskRadiusForPoi: Int = 3,         // was 2 — wider POI search around each candidate
+    private val candidateDiskRadius: Int = 4,       // was 2 — look further off the direct line
+    private val openingHalfAngleDeg: Double = 160.0 // was 120 — allow more sideways detours
 ) {
     companion object {
         private const val TAG = "H3OpeningScorer"
@@ -88,9 +88,15 @@ class H3OpeningScorer(
     }
 
     /**
-     * IMPROVED POI scoring that uses relative preference weights.
-     * This ensures that when user sets parks=high, residential=low, busy=low,
-     * cells with parks are strongly preferred over cells with busy areas.
+     * Scores a candidate cell based on how well its surrounding POIs match
+     * the user's slider preferences.
+     *
+     * Key sensitivity improvements:
+     * - diskRadiusForPoi is now 3 (was 2) — counts POIs in a wider area
+     * - preferenceBonus is now +3.0 (was +1.5) — strongly rewards the right category
+     * - penalty for non-preferred is now -1.0 (was -0.5) — harder avoidance of wrong categories
+     * - minimum score floor: if the preferred category has ANY POIs, always return > 0
+     *   so the detour is never discarded just because counts are low
      */
     private fun poiScoreAroundCell(cell: Long, prefs: RoutePrefs): Double {
         val disk: List<Long> = h3.gridDisk(cell, diskRadiusForPoi)
@@ -101,48 +107,57 @@ class H3OpeningScorer(
 
         val counts = poiRepo.countCats(diskCells) // [parks, residential, busy]
         val parksCount = counts[0].toDouble()
-        val resCount = counts[1].toDouble()
-        val busyCount = counts[2].toDouble()
+        val resCount   = counts[1].toDouble()
+        val busyCount  = counts[2].toDouble()
 
-        // Get preference values
         val pVal = prefs.parks.toDouble()
         val rVal = prefs.residential.toDouble()
         val bVal = prefs.busy.toDouble()
 
         val maxPref = maxOf(pVal, rVal, bVal)
-        val total = pVal + rVal + bVal + 0.001
 
-        // Compute weights using relative scoring
         val pWeight = computeCategoryWeight(pVal, maxPref)
         val rWeight = computeCategoryWeight(rVal, maxPref)
         val bWeight = computeCategoryWeight(bVal, maxPref)
 
-        // Use log scaling to normalize POI counts
         val pNorm = logScale(parksCount)
         val rNorm = logScale(resCount)
         val bNorm = logScale(busyCount)
 
-        val score = pNorm * pWeight + rNorm * rWeight + bNorm * bWeight
+        var score = pNorm * pWeight + rNorm * rWeight + bNorm * bWeight
+
+        // Floor: if the preferred category has any POIs at all, guarantee a
+        // positive score so this detour is never silently discarded
+        val preferredCount = when {
+            rVal >= maxPref && maxPref > 0.01 -> resCount
+            pVal >= maxPref && maxPref > 0.01 -> parksCount
+            bVal >= maxPref && maxPref > 0.01 -> busyCount
+            else -> 0.0
+        }
+        if (preferredCount > 0.0 && score <= 0.0) {
+            score = 0.1 * logScale(preferredCount)
+        }
 
         return score
     }
 
     /**
-     * Compute weight for a category based on its preference value relative to others.
+     * Compute weight for a category relative to the highest slider.
+     *
+     * Changes vs before:
+     * - preferenceBonus: 3.0 (was 1.5) — makes the preferred category dominate much more
+     * - penalty: -1.0 multiplier (was -0.5) — more aggressively avoids non-preferred
      */
     private fun computeCategoryWeight(value: Double, maxPref: Double): Double {
         val relativeToMax = if (maxPref > 0.001) value / maxPref else 1.0
 
-        // Base weight from slider value
         val baseWeight = value
 
-        // Bonus if this is the preferred category
         val isPreferred = relativeToMax >= 0.8
-        val preferenceBonus = if (isPreferred) 1.5 else 0.0
+        val preferenceBonus = if (isPreferred) 3.0 else 0.0  // was 1.5
 
-        // Penalty if this category is significantly lower than max
         val penalty = if (relativeToMax < 0.5 && maxPref > 0.3) {
-            -0.5 * (1.0 - relativeToMax)
+            -1.0 * (1.0 - relativeToMax)  // was -0.5
         } else {
             0.0
         }
