@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Classic lightning-bolt glyph (Material flash_on). Universal symbol of
+  speed/pace, and the geometry is simple enough that it renders perfectly
+  even at 20dp. Eight straight edges — no curves to misalign.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#7C39A0">
+
+    <path
+        android:fillColor="#000000"
+        android:pathData="M7,2 v 11 h 3 v 9 l 7,-12 h -4 l 4,-8 z" />
+
+</vector>

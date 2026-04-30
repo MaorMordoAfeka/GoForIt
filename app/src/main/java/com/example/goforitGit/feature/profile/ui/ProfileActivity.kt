@@ -135,9 +135,12 @@ class ProfileActivity : AppCompatActivity() {
         val start = binding.sliderQuietStart.value.toInt()
         val end = binding.sliderQuietEnd.value.toInt()
 
-        binding.tvQuietStartValue.text = hourLabel(start)
-        binding.tvQuietEndValue.text = hourLabel(end)
-        binding.tvQuietSummary.text = "Quiet hours: ${hourLabel(start)} → ${hourLabel(end)}"
+        val startLabel = hourLabel(start)
+        val endLabel = hourLabel(end)
+
+        binding.tvQuietStartValue.text = startLabel
+        binding.tvQuietEndValue.text = endLabel
+        binding.tvQuietSummary.text = "Notifications will be muted from $startLabel to $endLabel."
     }
 
     private fun hourLabel(hour: Int): String = String.format("%02d:00", hour)

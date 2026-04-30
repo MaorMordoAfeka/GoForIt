@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pause glyph — two vertical bars. Universal symbol for "at rest / not
+  moving". Used when MotionMode == STATIONARY (device idle, e.g. on a
+  desk). Distinct from STANDING_STILL, which uses a person silhouette.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#7C39A0">
+
+    <path
+        android:fillColor="#000000"
+        android:pathData="M6,5 h 4 v 14 H 6 V 5 z M 14,5 h 4 v 14 h -4 V 5 z" />
+
+</vector>

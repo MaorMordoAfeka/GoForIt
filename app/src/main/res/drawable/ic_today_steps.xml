@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Calendar with a single highlighted date cell — Material "today" glyph.
+  Used by the "Today" stat tile on the home screen.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#7C39A0">
+
+    <path
+        android:fillColor="#000000"
+        android:pathData="M19,3 h -1 V 1 h -2 v 2 H 8 V 1 H 6 v 2 H 5 c -1.11,0 -1.99,0.9 -1.99,2 L 3,19 c 0,1.1 0.88,2 1.99,2 H 19 c 1.1,0 2,-0.9 2,-2 V 5 c 0,-1.1 -0.9,-2 -2,-2 z m 0,16 H 5 V 8 h 14 v 11 z M 7,10 h 5 v 5 H 7 z" />
+
+</vector>

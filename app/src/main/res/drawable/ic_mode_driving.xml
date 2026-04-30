@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Car silhouette (side view, two visible wheels) — Material
+  "directions_car" glyph. Used when MotionMode == DRIVING.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#7C39A0">
+
+    <path
+        android:fillColor="#000000"
+        android:pathData="M18.92,6.01 C 18.72,5.42 18.16,5 17.5,5 h -11 c -0.66,0 -1.21,0.42 -1.42,1.01 L 3,12 v 8 c 0,0.55 0.45,1 1,1 h 1 c 0.55,0 1,-0.45 1,-1 v -1 h 12 v 1 c 0,0.55 0.45,1 1,1 h 1 c 0.55,0 1,-0.45 1,-1 v -8 l -2.08,-5.99 z M 6.5,16 c -0.83,0 -1.5,-0.67 -1.5,-1.5 S 5.67,13 6.5,13 8,13.67 8,14.5 7.33,16 6.5,16 z m 11,0 c -0.83,0 -1.5,-0.67 -1.5,-1.5 s 0.67,-1.5 1.5,-1.5 1.5,0.67 1.5,1.5 -0.67,1.5 -1.5,1.5 z M 5,11 l 1.5,-4.5 h 11 L 19,11 H 5 z" />
+
+</vector>
