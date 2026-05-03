@@ -3,13 +3,16 @@ package com.example.goforitGit.feature.auth.ui
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.util.Patterns
 import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.example.goforitGit.navigation.MainActivity
-import com.example.goforitGit.databinding.FeatureAuthRegisterBinding
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
+import com.example.goforitGit.databinding.FeatureAuthRegisterBinding
+import com.example.goforitGit.navigation.MainActivity
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -21,38 +24,59 @@ class RegisterActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        Firebase.auth.currentUser?.let {
+            goToMain()
+            return
+        }
+
         binding = FeatureAuthRegisterBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         binding.btnRegister.setOnClickListener {
-            val email = binding.etEmail.text?.toString()?.trim().orEmpty()
-            val pass = binding.etPassword.text?.toString().orEmpty()
-            val confirm = binding.etConfirmPassword.text?.toString().orEmpty()
-
-            binding.tilEmail.error = null
-            binding.tilPassword.error = null
-            binding.tilConfirmPassword.error = null
-
-            var ok = true
-            if (email.isBlank()) { binding.tilEmail.error = "Email is required"; ok = false }
-            if (pass.isBlank()) { binding.tilPassword.error = "Password is required"; ok = false }
-            if (confirm.isBlank()) { binding.tilConfirmPassword.error = "Confirm password is required"; ok = false }
-            if (pass.isNotBlank() && confirm.isNotBlank() && pass != confirm) {
-                binding.tilConfirmPassword.error = "Passwords do not match"
-                ok = false
-            }
-            if (pass.length in 1..5) {
-                binding.tilPassword.error = "Password must be at least 6 characters"
-                ok = false
-            }
-            if (!ok) return@setOnClickListener
-
-            registerOnce(email, pass)
+            attemptRegister()
         }
 
         binding.btnGoToLogin.setOnClickListener {
-            finish() // back to LoginActivity
+            finish()
         }
+    }
+
+    private fun attemptRegister() {
+        val email = binding.etEmail.text?.toString()?.trim().orEmpty()
+        val pass = binding.etPassword.text?.toString().orEmpty()
+        val confirm = binding.etConfirmPassword.text?.toString().orEmpty()
+
+        clearErrors()
+
+        var ok = true
+
+        if (email.isBlank()) {
+            binding.tilEmail.error = "Email is required"
+            ok = false
+        } else if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            binding.tilEmail.error = "Enter a valid email address"
+            ok = false
+        }
+
+        if (pass.isBlank()) {
+            binding.tilPassword.error = "Password is required"
+            ok = false
+        } else if (pass.length < 6) {
+            binding.tilPassword.error = "Password must be at least 6 characters"
+            ok = false
+        }
+
+        if (confirm.isBlank()) {
+            binding.tilConfirmPassword.error = "Confirm password is required"
+            ok = false
+        } else if (pass != confirm) {
+            binding.tilConfirmPassword.error = "Passwords do not match"
+            ok = false
+        }
+
+        if (!ok) return
+
+        registerOnce(email, pass)
     }
 
     private fun registerOnce(email: String, password: String) {
@@ -63,14 +87,19 @@ class RegisterActivity : AppCompatActivity() {
             try {
                 val reg = FirebaseServerApi.register(email, password)
                 reg.onFailure { e ->
-                    Toast.makeText(this@RegisterActivity, "Register failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this@RegisterActivity,
+                        "Register failed: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
                     return@launch
                 }
 
-                // Optional but recommended: register FCM token now (user doc is created server-side anyway)
                 runCatching { FirebaseServerApi.registerFcmTokenResult() }
                     .getOrNull()
-                    ?.onFailure { e -> Log.e("FCM", "Token register failed: ${e.message}", e) }
+                    ?.onFailure { e ->
+                        Log.e("FCM", "Token register failed: ${e.message}", e)
+                    }
 
                 goToMain()
             } finally {
@@ -78,6 +107,12 @@ class RegisterActivity : AppCompatActivity() {
                 registerInFlight.set(false)
             }
         }
+    }
+
+    private fun clearErrors() {
+        binding.tilEmail.error = null
+        binding.tilPassword.error = null
+        binding.tilConfirmPassword.error = null
     }
 
     private fun setLoading(loading: Boolean) {

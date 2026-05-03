@@ -56,7 +56,8 @@
             android:exported="false" />
         <activity
             android:name=".feature.auth.ui.RegisterActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:theme="@style/Theme.GoForIt.NoActionBar" />
         <activity
             android:name=".feature.auth.ui.LoginActivity"
             android:exported="true"
