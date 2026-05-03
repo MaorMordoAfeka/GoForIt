@@ -1,5 +1,6 @@
 package com.example.goforitGit.feature.leaderboard.ui
 
+import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -7,10 +8,14 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.example.goforitGit.R
 import com.example.goforitGit.feature.leaderboard.model.LeaderboardEntry
+import com.google.android.material.card.MaterialCardView
+import com.google.firebase.auth.FirebaseAuth
 
 class LeaderboardAdapter : RecyclerView.Adapter<LeaderboardAdapter.LeaderboardViewHolder>() {
 
     private val items = mutableListOf<LeaderboardEntry>()
+    private val currentUid: String?
+        get() = FirebaseAuth.getInstance().currentUser?.uid
 
     fun replaceAll(newItems: List<LeaderboardEntry>) {
         items.clear()
@@ -32,12 +37,14 @@ class LeaderboardAdapter : RecyclerView.Adapter<LeaderboardAdapter.LeaderboardVi
     }
 
     override fun onBindViewHolder(holder: LeaderboardViewHolder, position: Int) {
-        holder.bind(items[position])
+        holder.bind(items[position], currentUid)
     }
 
     override fun getItemCount(): Int = items.size
 
     class LeaderboardViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        private val cardRoot: MaterialCardView = itemView.findViewById(R.id.cardRoot)
+        private val viewAccent: View = itemView.findViewById(R.id.viewAccent)
         private val tvRank: TextView = itemView.findViewById(R.id.tvRank)
         private val tvUid: TextView = itemView.findViewById(R.id.tvUid)
         private val tvPoints: TextView = itemView.findViewById(R.id.tvPoints)
@@ -45,13 +52,49 @@ class LeaderboardAdapter : RecyclerView.Adapter<LeaderboardAdapter.LeaderboardVi
         private val tvBonus: TextView = itemView.findViewById(R.id.tvBonus)
         private val tvFaculty: TextView = itemView.findViewById(R.id.tvFaculty)
 
-        fun bind(item: LeaderboardEntry) {
+        fun bind(item: LeaderboardEntry, currentUid: String?) {
+            val isCurrentUser = currentUid != null && currentUid == item.uid
+
             tvRank.text = "#${item.rank}"
-            tvUid.text = item.uid
-            tvPoints.text = "Points: ${item.totalPoints}"
-            tvSteps.text = "Steps: ${item.totalSteps}"
-            tvBonus.text = "Bonus: ${item.bonusPoints}"
-            tvFaculty.text = "Faculty: ${item.faculty.ifBlank { "-" }}"
+            tvUid.text = if (isCurrentUser) {
+                "You • ${maskUid(item.uid)}"
+            } else {
+                maskUid(item.uid)
+            }
+
+            tvPoints.text = item.totalPoints.toString()
+            tvSteps.text = item.totalSteps.toString()
+            tvBonus.text = item.bonusPoints.toString()
+            tvFaculty.text = item.faculty.ifBlank { "General" }
+
+            val accentColor = when (item.rank) {
+                1 -> Color.parseColor("#F2B233")
+                2 -> Color.parseColor("#A8B0C4")
+                3 -> Color.parseColor("#C9824A")
+                else -> Color.parseColor("#883FA8")
+            }
+
+            viewAccent.setBackgroundColor(accentColor)
+            tvRank.setTextColor(accentColor)
+
+            if (isCurrentUser) {
+                cardRoot.setCardBackgroundColor(Color.parseColor("#F7FFF9"))
+                cardRoot.strokeColor = Color.parseColor("#4FB36A")
+                cardRoot.strokeWidth = dp(itemView, 2)
+            } else {
+                cardRoot.setCardBackgroundColor(Color.WHITE)
+                cardRoot.strokeColor = Color.parseColor("#E7E1F2")
+                cardRoot.strokeWidth = dp(itemView, 1)
+            }
+        }
+
+        private fun maskUid(uid: String): String {
+            if (uid.length <= 10) return uid
+            return "${uid.take(6)}...${uid.takeLast(4)}"
+        }
+
+        private fun dp(view: View, value: Int): Int {
+            return (value * view.resources.displayMetrics.density).toInt()
         }
     }
 }

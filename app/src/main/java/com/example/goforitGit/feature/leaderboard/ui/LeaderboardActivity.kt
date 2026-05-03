@@ -2,9 +2,11 @@ package com.example.goforitGit.feature.leaderboard.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -13,6 +15,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.goforitGit.R
 import com.example.goforitGit.feature.leaderboard.model.LeaderboardEntry
+import com.google.android.material.card.MaterialCardView
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
@@ -38,6 +41,11 @@ class LeaderboardActivity : AppCompatActivity() {
         }
     }
 
+    private lateinit var cardList: View
+    private lateinit var layoutPageButtons: View
+
+    private lateinit var btnBack: ImageButton
+
     private lateinit var tvDayKey: TextView
     private lateinit var tvEmpty: TextView
     private lateinit var tvPageInfo: TextView
@@ -54,6 +62,11 @@ class LeaderboardActivity : AppCompatActivity() {
     private lateinit var btnSort: Button
     private lateinit var btnPrevPage: Button
     private lateinit var btnNextPage: Button
+
+    private lateinit var cardPodium: View
+    private lateinit var cardPodiumFirst: MaterialCardView
+    private lateinit var cardPodiumSecond: MaterialCardView
+    private lateinit var cardPodiumThird: MaterialCardView
 
     private val adapter = LeaderboardAdapter()
     private val firestore by lazy { FirebaseFirestore.getInstance() }
@@ -72,6 +85,7 @@ class LeaderboardActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        supportActionBar?.hide()
         setContentView(R.layout.feature_leaderboard_activity)
 
         bindViews()
@@ -90,6 +104,8 @@ class LeaderboardActivity : AppCompatActivity() {
     }
 
     private fun bindViews() {
+        btnBack = findViewById(R.id.btnBack)
+
         tvDayKey = findViewById(R.id.tvDayKey)
         tvEmpty = findViewById(R.id.tvEmpty)
         tvPageInfo = findViewById(R.id.tvPageInfo)
@@ -106,14 +122,25 @@ class LeaderboardActivity : AppCompatActivity() {
         btnSort = findViewById(R.id.btnSort)
         btnPrevPage = findViewById(R.id.btnPrevPage)
         btnNextPage = findViewById(R.id.btnNextPage)
+
+        cardPodium = findViewById(R.id.cardPodium)
+        cardPodiumFirst = findViewById(R.id.cardPodiumFirst)
+        cardPodiumSecond = findViewById(R.id.cardPodiumSecond)
+        cardPodiumThird = findViewById(R.id.cardPodiumThird)
+
+        cardList = findViewById(R.id.cardList)
+        layoutPageButtons = findViewById(R.id.layoutPageButtons)
     }
 
     private fun setupRecycler() {
         recyclerView.layoutManager = LinearLayoutManager(this)
         recyclerView.adapter = adapter
+        recyclerView.isNestedScrollingEnabled = false
     }
 
     private fun setupButtons() {
+        btnBack.setOnClickListener { finish() }
+
         btnPrevDay.setOnClickListener { changeDayBy(-1) }
         btnToday.setOnClickListener { goToToday() }
         btnNextDay.setOnClickListener { changeDayBy(1) }
@@ -240,19 +267,143 @@ class LeaderboardActivity : AppCompatActivity() {
     }
 
     private fun renderCurrentPage() {
-        val displayItems = if (sortDescending) {
-            currentPageEntriesAsc.sortedByDescending { it.rank }
+        val podiumEntries = podiumEntriesForCurrentPage()
+        renderPodium(podiumEntries)
+
+        val displayItems = recyclerEntriesForCurrentPage()
+
+        val hasPodium = podiumEntries.isNotEmpty()
+        val hasListItems = displayItems.isNotEmpty()
+
+        adapter.replaceAll(displayItems)
+
+        if (hasListItems) {
+            cardList.visibility = View.VISIBLE
+            recyclerView.scrollToPosition(0)
+        } else {
+            cardList.visibility = View.GONE
+        }
+
+        layoutPageButtons.visibility =
+            if (hasListItems || currentPageIndex > 0 || hasNextPage) View.VISIBLE else View.GONE
+
+        tvEmpty.visibility =
+            if (!hasPodium && !hasListItems) View.VISIBLE else View.GONE
+
+        tvDayKey.text = "Day: $dayKey"
+        tvPageInfo.text = buildPageInfo(currentPageEntriesAsc)
+        btnSort.text = if (sortDescending) "Sort ↑" else "Sort ↓"
+    }
+
+    private fun podiumEntriesForCurrentPage(): List<LeaderboardEntry> {
+        if (currentPageIndex != 0) return emptyList()
+        return currentPageEntriesAsc.filter { it.rank in 1..3 }.sortedBy { it.rank }
+    }
+
+    private fun recyclerEntriesForCurrentPage(): List<LeaderboardEntry> {
+        val withoutPodium = if (currentPageIndex == 0) {
+            currentPageEntriesAsc.filter { it.rank > 3 }
         } else {
             currentPageEntriesAsc
         }
 
-        adapter.replaceAll(displayItems)
-        recyclerView.scrollToPosition(0)
+        return if (sortDescending) {
+            withoutPodium.sortedByDescending { it.rank }
+        } else {
+            withoutPodium.sortedBy { it.rank }
+        }
+    }
 
-        tvEmpty.visibility = if (displayItems.isEmpty()) View.VISIBLE else View.GONE
-        tvDayKey.text = "Day: $dayKey"
-        tvPageInfo.text = buildPageInfo(currentPageEntriesAsc)
-        btnSort.text = if (sortDescending) "Sort ↑" else "Sort ↓"
+    private fun renderPodium(entries: List<LeaderboardEntry>) {
+        if (entries.isEmpty()) {
+            cardPodium.visibility = View.GONE
+            return
+        }
+
+        cardPodium.visibility = View.VISIBLE
+
+        bindPodiumCard(
+            card = cardPodiumFirst,
+            entry = entries.firstOrNull { it.rank == 1 },
+            badge = "🥇",
+            accentColor = "#4FB36A",
+            fallbackRank = "#1"
+        )
+
+        bindPodiumCard(
+            card = cardPodiumSecond,
+            entry = entries.firstOrNull { it.rank == 2 },
+            badge = "🥈",
+            accentColor = "#6F788E",
+            fallbackRank = "#2"
+        )
+
+        bindPodiumCard(
+            card = cardPodiumThird,
+            entry = entries.firstOrNull { it.rank == 3 },
+            badge = "🥉",
+            accentColor = "#C9824A",
+            fallbackRank = "#3"
+        )
+    }
+
+    private fun bindPodiumCard(
+        card: MaterialCardView,
+        entry: LeaderboardEntry?,
+        badge: String,
+        accentColor: String,
+        fallbackRank: String
+    ) {
+        if (entry == null) {
+            card.visibility = View.INVISIBLE
+            return
+        }
+
+        card.visibility = View.VISIBLE
+
+        val rankId = when (card.id) {
+            R.id.cardPodiumFirst -> R.id.tvPodiumRank1
+            R.id.cardPodiumSecond -> R.id.tvPodiumRank2
+            else -> R.id.tvPodiumRank3
+        }
+        val badgeId = when (card.id) {
+            R.id.cardPodiumFirst -> R.id.tvPodiumBadge1
+            R.id.cardPodiumSecond -> R.id.tvPodiumBadge2
+            else -> R.id.tvPodiumBadge3
+        }
+        val uidId = when (card.id) {
+            R.id.cardPodiumFirst -> R.id.tvPodiumUid1
+            R.id.cardPodiumSecond -> R.id.tvPodiumUid2
+            else -> R.id.tvPodiumUid3
+        }
+        val pointsId = when (card.id) {
+            R.id.cardPodiumFirst -> R.id.tvPodiumPoints1
+            R.id.cardPodiumSecond -> R.id.tvPodiumPoints2
+            else -> R.id.tvPodiumPoints3
+        }
+        val facultyId = when (card.id) {
+            R.id.cardPodiumFirst -> R.id.tvPodiumFaculty1
+            R.id.cardPodiumSecond -> R.id.tvPodiumFaculty2
+            else -> R.id.tvPodiumFaculty3
+        }
+
+        card.findViewById<TextView>(badgeId).text = badge
+        card.findViewById<TextView>(rankId).apply {
+            text = if (entry.rank > 0) "#${entry.rank}" else fallbackRank
+            setTextColor(Color.parseColor(accentColor))
+        }
+        card.findViewById<TextView>(uidId).text = podiumLabel(entry)
+        card.findViewById<TextView>(pointsId).text = "${entry.totalPoints} pts"
+        card.findViewById<TextView>(facultyId).text = entry.faculty.ifBlank { "General" }
+    }
+
+    private fun podiumLabel(entry: LeaderboardEntry): String {
+        val uid = auth.currentUser?.uid
+        return if (uid != null && uid == entry.uid) {
+            "You • ${maskUid(entry.uid)}"
+        } else {
+            maskUid(entry.uid)
+        }
     }
 
     private fun buildPageInfo(itemsAsc: List<LeaderboardEntry>): String {
@@ -264,7 +415,8 @@ class LeaderboardActivity : AppCompatActivity() {
 
         val minRank = itemsAsc.minOf { it.rank }
         val maxRank = itemsAsc.maxOf { it.rank }
-        return "Page $pageNumber • #$minRank - #$maxRank"
+        return "\nPage $pageNumber ranking range:\n\n" +
+                "Min rank: #$minRank  -  Max rank: #$maxRank"
     }
 
     private fun updateControls() {
@@ -285,6 +437,8 @@ class LeaderboardActivity : AppCompatActivity() {
 
         btnPrevPage.isEnabled = !isLoading && currentPageIndex > 0
         btnNextPage.isEnabled = !isLoading && hasNextPage
+
+        btnSort.visibility = if (recyclerEntriesForCurrentPage().isNotEmpty()) View.VISIBLE else View.GONE
     }
 
     private fun showMyRank() {
@@ -294,12 +448,13 @@ class LeaderboardActivity : AppCompatActivity() {
             return
         }
 
-        val displayItems = if (sortDescending) {
-            currentPageEntriesAsc.sortedByDescending { it.rank }
-        } else {
-            currentPageEntriesAsc
+        val podiumHit = podiumEntriesForCurrentPage().firstOrNull { it.uid == uid }
+        if (podiumHit != null) {
+            toast("You are on the podium at #${podiumHit.rank}")
+            return
         }
 
+        val displayItems = recyclerEntriesForCurrentPage()
         val localIndex = displayItems.indexOfFirst { it.uid == uid }
         if (localIndex >= 0) {
             recyclerView.scrollToPosition(localIndex)
@@ -362,12 +517,15 @@ class LeaderboardActivity : AppCompatActivity() {
         val uid = pendingScrollUid ?: return
         val rank = pendingScrollRank
 
-        val displayItems = if (sortDescending) {
-            currentPageEntriesAsc.sortedByDescending { it.rank }
-        } else {
-            currentPageEntriesAsc
+        val podiumHit = podiumEntriesForCurrentPage().firstOrNull { it.uid == uid }
+        if (podiumHit != null) {
+            toast("Jumped to your podium rank #${podiumHit.rank}")
+            pendingScrollUid = null
+            pendingScrollRank = null
+            return
         }
 
+        val displayItems = recyclerEntriesForCurrentPage()
         val index = displayItems.indexOfFirst { it.uid == uid }
         if (index >= 0) {
             recyclerView.scrollToPosition(index)
@@ -380,6 +538,11 @@ class LeaderboardActivity : AppCompatActivity() {
 
         pendingScrollUid = null
         pendingScrollRank = null
+    }
+
+    private fun maskUid(uid: String): String {
+        if (uid.length <= 10) return uid
+        return "${uid.take(6)}...${uid.takeLast(4)}"
     }
 
     private fun toast(message: String) {
