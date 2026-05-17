@@ -5,6 +5,7 @@
     <!-- ========================================================= -->
     <!--                         Permissions                       -->
     <!-- ========================================================= -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> <!-- Boot / persistence -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" /> <!-- Activity recognition + sensors -->
@@ -82,20 +83,21 @@
         <!-- ===================================================== -->
         <receiver
             android:name=".core.util.Receivers.BootReceiver"
-            android:directBootAware="true"
             android:enabled="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <action android:name="android.intent.action.USER_UNLOCKED" />
             </intent-filter>
         </receiver>
 
         <!-- ===================================================== -->
         <!--                        Services                       -->
         <!-- ===================================================== -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
         <service
             android:name=".core.service.StepService"
             android:exported="false"

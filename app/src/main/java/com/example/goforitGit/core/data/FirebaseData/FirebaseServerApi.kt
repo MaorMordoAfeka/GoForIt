@@ -6,6 +6,7 @@ import com.google.firebase.auth.auth
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.functions.functions
 import com.google.firebase.messaging.messaging
+import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.tasks.await
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -46,6 +47,7 @@ object FirebaseServerApi {
 
     /** Cloud Functions entry point bound to the chosen region. */
     private val functions: FirebaseFunctions by lazy { Firebase.functions(FUNCTIONS_REGION) }
+    private val storage: FirebaseStorage by lazy { FirebaseStorage.getInstance() }
 
     /**
      * Minimal auth info returned after login/register.
@@ -67,6 +69,9 @@ object FirebaseServerApi {
      * Full editable user profile returned by profile callables.
      */
     data class UserProfile(
+        val username: String,
+        val email: String,
+        val profileImageUrl: String,
         val timezone: String,
         val lowActivityNudgeEnabled: Boolean,
         val preferredActiveInterval: Int?,
@@ -156,6 +161,9 @@ object FirebaseServerApi {
      */
     private fun mapToUserProfile(map: Map<*, *>): UserProfile {
         return UserProfile(
+            username = map["username"] as? String ?: "",
+            email = map["email"] as? String ?: "",
+            profileImageUrl = map["profileImageUrl"] as? String ?: "",
             timezone = map["timezone"] as? String ?: DEFAULT_TIMEZONE,
             lowActivityNudgeEnabled = map["lowActivityNudgeEnabled"] as? Boolean ?: true,
             preferredActiveInterval = (map["preferredActiveInterval"] as? Number)?.toInt(),
@@ -235,6 +243,9 @@ object FirebaseServerApi {
             requireValidHour(profile.quietHoursEndHour, "quietHoursEndHour")
 
             val payload = mapOf(
+                "username" to profile.username.trim(),
+                "email" to profile.email.trim(),
+                "profileImageUrl" to profile.profileImageUrl.trim(),
                 "timezone" to profile.timezone,
                 "faculty" to profile.faculty.trim(),
                 "lowActivityNudgeEnabled" to profile.lowActivityNudgeEnabled,
@@ -249,6 +260,20 @@ object FirebaseServerApi {
             if (!ok) error("updateMyProfile returned ok=false.")
 
             mapToUserProfile(map)
+        }
+    }
+
+    suspend fun uploadProfileImageBytesResult(bytes: ByteArray): Result<String> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            val uid = uidCheck.getOrThrow()
+            val ref = storage.reference.child("profile_images/$uid.jpg")
+            ref.putBytes(bytes).await()
+            ref.downloadUrl.await().toString()
         }
     }
 
