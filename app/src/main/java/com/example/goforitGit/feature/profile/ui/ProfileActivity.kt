@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.util.Log
 import android.util.Patterns
 import android.view.View
 import android.widget.ArrayAdapter
@@ -18,6 +19,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
+import androidx.core.widget.ImageViewCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
@@ -28,6 +30,7 @@ import com.google.android.material.timepicker.TimeFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
 import java.net.URL
 import java.text.NumberFormat
 import java.time.Duration
@@ -114,6 +117,8 @@ class ProfileActivity : AppCompatActivity() {
             if (uri != null) {
                 pendingImageUri = uri
                 binding.ivProfileImage.clearColorFilter()
+                ImageViewCompat.setImageTintList(binding.ivProfileImage, null)
+                binding.ivProfileImage.setPadding(0, 0, 0, 0)
                 binding.ivProfileImage.setImageURI(uri)
                 refreshDirtyState()
             }
@@ -542,20 +547,44 @@ class ProfileActivity : AppCompatActivity() {
 
     private suspend fun loadRemoteImage(url: String) {
         val bitmap = withContext(Dispatchers.IO) {
-            runCatching {
-                URL(url).openStream().use { BitmapFactory.decodeStream(it) }
-            }.getOrNull()
+            try {
+                val connection = URL(url).openConnection() as HttpURLConnection
+                connection.connectTimeout = 8_000
+                connection.readTimeout = 8_000
+                connection.instanceFollowRedirects = true
+                connection.doInput = true
+                connection.connect()
+
+                val code = connection.responseCode
+                if (code !in 200..299) {
+                    Log.e(TAG, "Profile image fetch failed: HTTP $code for $url")
+                    null
+                } else {
+                    connection.inputStream.use { BitmapFactory.decodeStream(it) }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Profile image fetch threw for $url", e)
+                null
+            }
         }
         if (bitmap != null) setBitmapProfileImage(bitmap) else setDefaultProfileImage()
     }
 
     private fun setBitmapProfileImage(bitmap: Bitmap) {
+        // Clear BOTH tint mechanisms — app:tint uses ImageTintList (SRC_IN), which
+        // would re-tint the bitmap to a solid color. clearColorFilter alone is
+        // not enough.
         binding.ivProfileImage.clearColorFilter()
+        ImageViewCompat.setImageTintList(binding.ivProfileImage, null)
+        binding.ivProfileImage.setPadding(0, 0, 0, 0)
         binding.ivProfileImage.setImageBitmap(bitmap)
     }
 
     private fun setDefaultProfileImage() {
+        val pad = (14 * resources.displayMetrics.density).toInt()
+        binding.ivProfileImage.setPadding(pad, pad, pad, pad)
         binding.ivProfileImage.setImageResource(R.drawable.ic_person)
+        ImageViewCompat.setImageTintList(binding.ivProfileImage, null)
         binding.ivProfileImage.setColorFilter(Color.parseColor("#7C39A0"))
     }
 
@@ -763,6 +792,7 @@ class ProfileActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val TAG = "ProfileActivity"
         private const val DEFAULT_QUIET_START = 22
         private const val DEFAULT_QUIET_END = 8
     }
