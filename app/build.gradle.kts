@@ -106,6 +106,7 @@ dependencies {
     implementation("com.google.firebase:firebase-functions")
     implementation("com.google.firebase:firebase-messaging")
     implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-storage")
 
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.0")

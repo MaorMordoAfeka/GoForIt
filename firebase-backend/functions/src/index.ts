@@ -72,6 +72,54 @@ function validateFaculty(x: unknown): string {
   return faculty;
 }
 
+
+function validateUsername(x: unknown): string {
+  const username = typeof x === "string" ? x.trim() : "";
+  if (username.length < 3 || username.length > 24) {
+    throw new HttpsError("invalid-argument", "username must be 3..24 chars.");
+  }
+  // Allowed: letters, digits, spaces, and . _ - '
+  // Must start and end with a letter or digit (no leading/trailing spaces).
+  // Examples that pass: "naor zion", "Mary-Jane", "O'Brien", "john.doe"
+  if (!/^[A-Za-z0-9][A-Za-z0-9 _.'\-]{1,22}[A-Za-z0-9]$/.test(username)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "username may contain letters, numbers, spaces, and . _ - '"
+    );
+  }
+  return username;
+}
+
+function normalizeUsername(x: unknown): string {
+  const username = typeof x === "string" ? x.trim() : "";
+  // Collapse any run of internal whitespace to a single space so
+  // "Maor  Mordo" and "Maor Mordo" reserve the same uniqueness key.
+  return username.toLowerCase().replace(/\s+/g, " ");
+}
+
+function validateEmailAddress(x: unknown): string {
+  const email = typeof x === "string" ? x.trim() : "";
+  if (email.length === 0) {
+    throw new HttpsError("invalid-argument", "email is required.");
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpsError("invalid-argument", "email is invalid.");
+  }
+  return email;
+}
+
+function validateProfileImageUrl(x: unknown): string {
+  const url = typeof x === "string" ? x.trim() : "";
+  if (url.length === 0) return "";
+  if (url.length > 2000) {
+    throw new HttpsError("invalid-argument", "profileImageUrl is too long.");
+  }
+  if (!url.startsWith("https://")) {
+    throw new HttpsError("invalid-argument", "profileImageUrl must be an https URL.");
+  }
+  return url;
+}
+
 function validateSteps(x: unknown): number {
   if (typeof x !== "number" || !Number.isInteger(x) || x < 0 || x > 300000) {
     throw new HttpsError("invalid-argument", "stepsTotal must be non-negative int (reasonable range).");
@@ -344,6 +392,10 @@ type UserDocData = {
   uid: string;
   createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
   updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  username: string;
+  usernameNormalized: string;
+  email: string;
+  profileImageUrl: string;
   timezone: string;
   lowActivityNudgeEnabled: boolean;
   preferredActiveInterval: number | null;
@@ -356,9 +408,16 @@ type UserDocData = {
   cumulativeBonusPoints: number;
 };
 
-function buildUserDefaults(uid: string): Omit<UserDocData, "createdAt" | "updatedAt"> {
+function buildUserDefaults(
+  uid: string,
+  email = ""
+): Omit<UserDocData, "createdAt" | "updatedAt"> {
   return {
     uid,
+    username: "",
+    usernameNormalized: "",
+    email,
+    profileImageUrl: "",
     timezone: DEFAULT_TZ,
     lowActivityNudgeEnabled: true,
     preferredActiveInterval: null,
@@ -379,6 +438,9 @@ async function ensureUserDoc(uid: string): Promise<void> {
     const snap = await tx.get(userRef);
     const data = (snap.data() ?? {}) as Record<string, unknown>;
 
+    const storedUsername = typeof data.username === "string" ? data.username : "";
+    const normalizedStoredUsername = normalizeUsername(storedUsername);
+
     const patch: Record<string, unknown> = {
       uid,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -387,6 +449,16 @@ async function ensureUserDoc(uid: string): Promise<void> {
     if (!snap.exists || data.createdAt == null) {
       patch.createdAt = admin.firestore.FieldValue.serverTimestamp();
     }
+
+    if (typeof data.username !== "string") patch.username = "";
+    if (
+      typeof data.usernameNormalized !== "string" ||
+      data.usernameNormalized !== normalizedStoredUsername
+    ) {
+      patch.usernameNormalized = normalizedStoredUsername;
+    }
+    if (typeof data.email !== "string") patch.email = "";
+    if (typeof data.profileImageUrl !== "string") patch.profileImageUrl = "";
 
     if (typeof data.timezone !== "string") patch.timezone = DEFAULT_TZ;
     if (typeof data.lowActivityNudgeEnabled !== "boolean") patch.lowActivityNudgeEnabled = true;
@@ -419,6 +491,9 @@ async function ensureUserDoc(uid: string): Promise<void> {
 }
 
 async function getUserProfile(uid: string): Promise<{
+  username: string;
+  email: string;
+  profileImageUrl: string;
   timezone: string;
   lowActivityNudgeEnabled: boolean;
   preferredActiveInterval: number | null;
@@ -432,6 +507,10 @@ async function getUserProfile(uid: string): Promise<{
 }> {
   const snap = await db.doc(`users/${uid}`).get();
   const data = snap.data() ?? {};
+
+  const username = typeof data.username === "string" ? data.username : "";
+  const email = typeof data.email === "string" ? data.email : "";
+  const profileImageUrl = typeof data.profileImageUrl === "string" ? data.profileImageUrl : "";
 
   const timezone = normalizeTimezone(data.timezone);
   const lowActivityNudgeEnabled =
@@ -462,6 +541,9 @@ async function getUserProfile(uid: string): Promise<{
     typeof data.cumulativeBonusPoints === "number" ? data.cumulativeBonusPoints : 0;
 
   return {
+    username,
+    email,
+    profileImageUrl,
     timezone,
     lowActivityNudgeEnabled,
     preferredActiveInterval,
@@ -485,7 +567,7 @@ export const onAuthUserCreate = functionsV1
   .onCreate(async (user) => {
     const uid = user.uid;
     const userRef = db.doc(`users/${uid}`);
-    const defaults = buildUserDefaults(uid);
+    const defaults = buildUserDefaults(uid, user.email ?? "");
 
     await userRef.set(
       {
@@ -578,21 +660,24 @@ export const updateMyProfile = onCall({ region: FUNCTIONS_REGION }, async (reque
 
   await ensureUserDoc(uid);
 
+  const username = validateUsername(request.data?.username);
+  const usernameNormalized = normalizeUsername(username);
+  const email = validateEmailAddress(request.data?.email);
+  const profileImageUrl = validateProfileImageUrl(request.data?.profileImageUrl);
+
   const timezone = normalizeTimezone(request.data?.timezone);
   const faculty = validateFaculty(request.data?.faculty);
 
   const lowActivityNudgeEnabledRaw = request.data?.lowActivityNudgeEnabled as unknown;
   if (typeof lowActivityNudgeEnabledRaw !== "boolean") {
-    throw new HttpsError(
-      "invalid-argument",
-      "lowActivityNudgeEnabled must be boolean."
-    );
+    throw new HttpsError("invalid-argument", "lowActivityNudgeEnabled must be boolean.");
   }
 
   const quietHoursStartHour = validateHour(
     request.data?.quietHoursStartHour,
     "quietHoursStartHour"
   );
+
   const quietHoursEndHour = validateHour(
     request.data?.quietHoursEndHour,
     "quietHoursEndHour"
@@ -604,21 +689,77 @@ export const updateMyProfile = onCall({ region: FUNCTIONS_REGION }, async (reque
     current.quietHoursStartHour !== quietHoursStartHour ||
     current.quietHoursEndHour !== quietHoursEndHour;
 
-  const patch: Record<string, unknown> = {
-    timezone,
-    faculty,
-    lowActivityNudgeEnabled: lowActivityNudgeEnabledRaw,
-    quietHoursStartHour,
-    quietHoursEndHour,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-
-  if (quietHoursChanged) {
-    patch.preferredActiveInterval = null;
-    patch.preferredInactiveInterval = null;
+  if (email !== current.email) {
+    await admin.auth().updateUser(uid, { email });
   }
 
-  await db.doc(`users/${uid}`).set(patch, { merge: true });
+  const userRef = db.doc(`users/${uid}`);
+  const newUsernameRef = db.doc(`usernames/${usernameNormalized}`);
+
+  const oldUsernameNormalized = normalizeUsername(current.username);
+  const oldUsernameRef =
+    oldUsernameNormalized.length > 0
+      ? db.doc(`usernames/${oldUsernameNormalized}`)
+      : null;
+
+  await db.runTransaction(async (tx) => {
+    // IMPORTANT:
+    // In Firestore transactions, all reads must happen before all writes.
+
+    const newUsernameSnap = await tx.get(newUsernameRef);
+
+    const oldUsernameSnap =
+      oldUsernameRef && oldUsernameNormalized !== usernameNormalized
+        ? await tx.get(oldUsernameRef)
+        : null;
+
+    if (newUsernameSnap.exists) {
+      const ownerUid = newUsernameSnap.get("uid");
+
+      if (ownerUid !== uid) {
+        throw new HttpsError("already-exists", "This username is already taken.");
+      }
+    }
+
+    const patch: Record<string, unknown> = {
+      username,
+      usernameNormalized,
+      email,
+      profileImageUrl,
+      timezone,
+      faculty,
+      lowActivityNudgeEnabled: lowActivityNudgeEnabledRaw,
+      quietHoursStartHour,
+      quietHoursEndHour,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (quietHoursChanged) {
+      patch.preferredActiveInterval = null;
+      patch.preferredInactiveInterval = null;
+    }
+
+    tx.set(userRef, patch, { merge: true });
+
+    tx.set(
+      newUsernameRef,
+      {
+        uid,
+        username,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    if (
+      oldUsernameRef &&
+      oldUsernameSnap?.exists &&
+      oldUsernameSnap.get("uid") === uid &&
+      oldUsernameNormalized !== usernameNormalized
+    ) {
+      tx.delete(oldUsernameRef);
+    }
+  });
 
   const updated = await getUserProfile(uid);
 
