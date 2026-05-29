@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Compass icon for the MapLibre compass view. Drawn inside a 48x48 viewport
+  with ~5dp of transparent padding all around, so the glyph is never clipped
+  by the compass ImageView bounds. North = red needle (up), South = grey.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <!-- White disc background -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24,5 A19,19 0 1 0 24,43 A19,19 0 1 0 24,5 Z" />
+
+    <!-- Thin border ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#D8D2E6"
+        android:strokeWidth="1.5"
+        android:pathData="M24,5 A19,19 0 1 0 24,43 A19,19 0 1 0 24,5 Z" />
+
+    <!-- North needle (red) -->
+    <path
+        android:fillColor="#E53935"
+        android:pathData="M24,9 L19,24 L29,24 Z" />
+
+    <!-- South needle (grey) -->
+    <path
+        android:fillColor="#5C5F7A"
+        android:pathData="M24,39 L19,24 L29,24 Z" />
+</vector>

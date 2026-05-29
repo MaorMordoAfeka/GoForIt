@@ -1,15 +1,42 @@
 package com.example.goforitGit.feature.map.ui
 
+import android.Manifest
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.text.Editable
+import android.view.Gravity
+import android.text.TextWatcher
+import android.widget.ArrayAdapter
+import android.widget.Filter
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.goforitGit.R
+import com.example.goforitGit.feature.map.data.GeocoderApi
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.slider.Slider
-import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.MaterialAutoCompleteTextView
+import kotlinx.coroutines.launch
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.LineLayer
@@ -34,6 +61,7 @@ import org.maplibre.android.style.expressions.Expression.*
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.FillLayer
 import com.uber.h3core.H3Core
+import java.util.Locale
 
 
 class MapAndRoutesActivity : AppCompatActivity() {
@@ -104,8 +132,8 @@ class MapAndRoutesActivity : AppCompatActivity() {
     private lateinit var mapView: MapView
     private lateinit var tileServer: MbTilesServer
 
-    private lateinit var etStart: TextInputEditText
-    private lateinit var etDest: TextInputEditText
+    private lateinit var etStart: MaterialAutoCompleteTextView
+    private lateinit var etDest: MaterialAutoCompleteTextView
     private lateinit var sParks: Slider
     private lateinit var sResidential: Slider
     private lateinit var sBusy: Slider
@@ -120,12 +148,54 @@ class MapAndRoutesActivity : AppCompatActivity() {
     private var startPoint: LatLng? = null
     private var destPoint: LatLng? = null
 
+    // --- Place-name autocomplete (Photon) state ---
+    private val searchHandler = Handler(Looper.getMainLooper())
+    private var startSearchRunnable: Runnable? = null
+    private var destSearchRunnable: Runnable? = null
+    private lateinit var startAdapter: ArrayAdapter<String>
+    private lateinit var destAdapter: ArrayAdapter<String>
+    private var startResults: List<GeocoderApi.Suggestion> = emptyList()
+    private var destResults: List<GeocoderApi.Suggestion> = emptyList()
+    private var suppressStartSearch = false
+    private var suppressDestSearch = false
+
+    private val searchDebounceMs = 300L
+
+    private val CURRENT_LOCATION_LABEL = "📍 Use current location"
+
+    /**
+     * Adapter whose dropdown shows exactly the items we put in via
+     * clear()/addAll() — no client-side prefix filtering, since the
+     * suggestions already come pre-filtered from the geocoder. This is
+     * what lets Hebrew suggestions show for Hebrew (or English) typing.
+     */
+    private class NoFilterAdapter(context: Context) :
+        ArrayAdapter<String>(context, android.R.layout.simple_list_item_1) {
+        private val passThrough = object : Filter() {
+            override fun performFiltering(constraint: CharSequence?): FilterResults =
+                FilterResults().apply { count = 1 }
+            override fun publishResults(constraint: CharSequence?, results: FilterResults?) =
+                notifyDataSetChanged()
+        }
+        override fun getFilter(): Filter = passThrough
+    }
+
     private val routeSourceId    = "route-source"
     private val routeLayerId     = "route-layer"
     private val building3dLayerId = "building-3d-layer"
 
     private var mapStyle: Style? = null
+    private var maplibreMap: MapLibreMap? = null
     private lateinit var offlineRouter: OfflineRouter
+
+    // --- "You are here" walking figure ---
+    private lateinit var figureContainer: View
+    private lateinit var walkingFigure: ImageView
+    private lateinit var fusedLocation: FusedLocationProviderClient
+    private lateinit var userLocationCallback: LocationCallback
+    private var userLocation: LatLng? = null
+    private var locationUpdatesActive = false
+    private var figureAnimator: AnimatorSet? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -145,6 +215,9 @@ class MapAndRoutesActivity : AppCompatActivity() {
         btnClearH3   = findViewById(R.id.btnClearH3)
         btnShowPoi   = findViewById(R.id.btnShowPoi)
 
+        setupAutocomplete()
+        setupUserLocationFigure()
+
         val sheet = findViewById<View>(R.id.routeSheet)
         sheetBehavior = BottomSheetBehavior.from(sheet).apply {
             isFitToContents = false
@@ -161,6 +234,32 @@ class MapAndRoutesActivity : AppCompatActivity() {
                 else -> BottomSheetBehavior.STATE_HALF_EXPANDED
             }
         }
+
+        val fabMyLocation = findViewById<FloatingActionButton>(R.id.fabMyLocation)
+        fabMyLocation.setOnClickListener {
+            val loc = userLocation
+            if (loc == null) {
+                tvHint.text = "Still locating you… make sure location is on."
+                startLocationUpdates()
+                return@setOnClickListener
+            }
+            maplibreMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(loc, 16.0))
+        }
+
+        // Keep both FABs drawn on top of the map/overlays.
+        fabMenu.bringToFront()
+        fabMyLocation.bringToFront()
+
+        // Hide both FABs when the menu sheet is fully expanded upward
+        // (they would otherwise sit on top of the sheet content).
+        sheetBehavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
+            override fun onStateChanged(bottomSheet: View, newState: Int) {
+                val hidden = newState == BottomSheetBehavior.STATE_EXPANDED
+                fabMyLocation.visibility = if (hidden) View.GONE else View.VISIBLE
+                fabMenu.visibility = if (hidden) View.GONE else View.VISIBLE
+            }
+            override fun onSlide(bottomSheet: View, slideOffset: Float) = Unit
+        })
 
         tileServer = MbTilesServer(this)
         val ok = tileServer.startServerSafely()
@@ -202,6 +301,16 @@ class MapAndRoutesActivity : AppCompatActivity() {
         mapView.onCreate(savedInstanceState)
 
         mapView.getMapAsync { map ->
+            maplibreMap = map
+            // Keep the walking figure pinned to its GPS point as the map moves.
+            map.addOnCameraMoveListener { updateFigurePosition() }
+            // Drop the compass well below the status bar (top-right) and use a
+            // custom icon with built-in padding so it isn't clipped at the top.
+            map.uiSettings.compassGravity = Gravity.TOP or Gravity.END
+            map.uiSettings.setCompassMargins(0, dp(96f).toInt(), dp(16f).toInt(), 0)
+            ContextCompat.getDrawable(this, R.drawable.ic_map_compass)?.let {
+                map.uiSettings.setCompassImage(it)
+            }
             map.setStyle(Style.Builder().fromUri("asset://style_vector_localhost.json")) { style ->
                 mapStyle = style
 
@@ -239,13 +348,13 @@ class MapAndRoutesActivity : AppCompatActivity() {
                     if (startPoint == null || destPoint != null) {
                         startPoint = latLng
                         destPoint = null
-                        etStart.setText("${latLng.latitude},${latLng.longitude}")
-                        etDest.setText("")
+                        setFieldTextSilently(etStart, "${latLng.latitude},${latLng.longitude}", isStart = true)
+                        setFieldTextSilently(etDest, "", isStart = false)
                         tvHint.text = "Start set. Tap again to set Destination."
                         clearRoute(style)
                     } else {
                         destPoint = latLng
-                        etDest.setText("${latLng.latitude},${latLng.longitude}")
+                        setFieldTextSilently(etDest, "${latLng.latitude},${latLng.longitude}", isStart = false)
                         tvHint.text = "Destination set. Press Plan Route."
                     }
                     mapStyle?.let { updatePins(it) }
@@ -449,6 +558,248 @@ class MapAndRoutesActivity : AppCompatActivity() {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Place-name autocomplete (Photon, online). Routing stays offline.
+    // -----------------------------------------------------------------------
+
+    private fun setupAutocomplete() {
+        startAdapter = NoFilterAdapter(this)
+        destAdapter = NoFilterAdapter(this)
+        etStart.setAdapter(startAdapter)
+        etDest.setAdapter(destAdapter)
+
+        // Let the Start dropdown open even before the user has typed (so the
+        // "current location" shortcut can appear on focus).
+        etStart.threshold = 1
+
+        etStart.addTextChangedListener(makeSearchWatcher(isStart = true))
+        etDest.addTextChangedListener(makeSearchWatcher(isStart = false))
+
+        etStart.setOnItemClickListener { _, _, position, _ ->
+            if (startAdapter.getItem(position) == CURRENT_LOCATION_LABEL) {
+                chooseCurrentLocationAsStart()
+            } else {
+                startResults.getOrNull(position)?.let { onSuggestionChosen(it, isStart = true) }
+            }
+        }
+        etDest.setOnItemClickListener { _, _, position, _ ->
+            destResults.getOrNull(position)?.let { onSuggestionChosen(it, isStart = false) }
+        }
+
+        // Offer "current location" as the first thing the user sees in Start,
+        // without preventing them from typing an address instead.
+        etStart.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus && etStart.text.isNullOrBlank()) showCurrentLocationOption()
+        }
+        etStart.setOnClickListener {
+            if (etStart.text.isNullOrBlank()) showCurrentLocationOption()
+        }
+    }
+
+    private fun showCurrentLocationOption() {
+        startResults = emptyList()
+        startAdapter.clear()
+        startAdapter.add(CURRENT_LOCATION_LABEL)
+        startAdapter.notifyDataSetChanged()
+        // Post so the dropdown opens after the focus/layout pass settles —
+        // calling showDropDown() synchronously during onFocusChange is ignored.
+        etStart.post {
+            if (etStart.hasFocus() && startAdapter.count > 0) {
+                etStart.showDropDown()
+            }
+        }
+    }
+
+    private fun chooseCurrentLocationAsStart() {
+        val loc = userLocation
+        if (loc == null) {
+            tvHint.text = "Still locating you… make sure location is on."
+            startLocationUpdates()
+            return
+        }
+        startPoint = loc
+        setFieldTextSilently(etStart, "Current location", isStart = true)
+        mapStyle?.let { updatePins(it) }
+        maplibreMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(loc, 16.0))
+
+        val coords = String.format(Locale.US, "%.5f, %.5f", loc.latitude, loc.longitude)
+        tvHint.text = if (IsraelBounds.contains(loc)) {
+            "Start set to your location ($coords). Set a destination, then Plan Route."
+        } else {
+            "Your location ($coords) is outside Israel — offline routing only works inside Israel."
+        }
+    }
+
+    private fun makeSearchWatcher(isStart: Boolean) = object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+        override fun afterTextChanged(s: Editable?) {
+            if (isStart && suppressStartSearch) return
+            if (!isStart && suppressDestSearch) return
+            scheduleSearch(s?.toString().orEmpty(), isStart)
+        }
+    }
+
+    private fun scheduleSearch(query: String, isStart: Boolean) {
+        (if (isStart) startSearchRunnable else destSearchRunnable)
+            ?.let { searchHandler.removeCallbacks(it) }
+
+        val q = query.trim()
+        // Empty Start field -> re-offer the current-location shortcut.
+        if (q.isEmpty()) {
+            if (isStart) showCurrentLocationOption()
+            return
+        }
+        // Too short, or already a "lat,lon" pair -> nothing to geocode.
+        if (q.length < 2 || parseLatLng(q) != null) return
+
+        val runnable = Runnable { runSearch(q, isStart) }
+        if (isStart) startSearchRunnable = runnable else destSearchRunnable = runnable
+        searchHandler.postDelayed(runnable, searchDebounceMs)
+    }
+
+    private fun runSearch(query: String, isStart: Boolean) {
+        lifecycleScope.launch {
+            val results = GeocoderApi.search(query)
+            val field = if (isStart) etStart else etDest
+            val adapter = if (isStart) startAdapter else destAdapter
+
+            if (isStart) startResults = results else destResults = results
+
+            adapter.clear()
+            adapter.addAll(results.map { it.label })
+            adapter.notifyDataSetChanged()
+
+            if (results.isNotEmpty() && field.hasFocus()) {
+                field.showDropDown()
+            }
+        }
+    }
+
+    private fun onSuggestionChosen(s: GeocoderApi.Suggestion, isStart: Boolean) {
+        val point = LatLng(s.lat, s.lon)
+        if (isStart) {
+            startPoint = point
+            setFieldTextSilently(etStart, s.label, isStart = true)
+        } else {
+            destPoint = point
+            setFieldTextSilently(etDest, s.label, isStart = false)
+        }
+        mapStyle?.let { updatePins(it) }
+        maplibreMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(point, 15.0))
+        tvHint.text = if (isStart) "Start set: ${s.label}" else "Destination set: ${s.label}"
+    }
+
+    private fun setFieldTextSilently(
+        field: MaterialAutoCompleteTextView,
+        text: String,
+        isStart: Boolean
+    ) {
+        if (isStart) suppressStartSearch = true else suppressDestSearch = true
+        field.setText(text, false) // false = don't run the adapter filter
+        field.dismissDropDown()
+        field.setSelection(text.length)
+        if (isStart) suppressStartSearch = false else suppressDestSearch = false
+    }
+
+    // -----------------------------------------------------------------------
+    // "You are here" walking figure (live GPS, animated overlay)
+    // -----------------------------------------------------------------------
+
+    private fun setupUserLocationFigure() {
+        figureContainer = findViewById(R.id.walkingFigureContainer)
+        walkingFigure = findViewById(R.id.walkingFigure)
+
+        fusedLocation = LocationServices.getFusedLocationProviderClient(this)
+        userLocationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                val loc = result.lastLocation ?: return
+                userLocation = LatLng(loc.latitude, loc.longitude)
+                updateFigurePosition()
+            }
+        }
+    }
+
+    private fun hasLocationPermission(): Boolean =
+        ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED ||
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+
+    @SuppressLint("MissingPermission")
+    private fun startLocationUpdates() {
+        if (locationUpdatesActive || !hasLocationPermission()) return
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3_000L)
+            .setMinUpdateIntervalMillis(1_500L)
+            .build()
+        fusedLocation.requestLocationUpdates(request, userLocationCallback, Looper.getMainLooper())
+        locationUpdatesActive = true
+    }
+
+    private fun stopLocationUpdates() {
+        if (!locationUpdatesActive) return
+        fusedLocation.removeLocationUpdates(userLocationCallback)
+        locationUpdatesActive = false
+    }
+
+    /** Place the figure so its feet dot sits on the GPS point; hide if off-screen. */
+    private fun updateFigurePosition() {
+        val map = maplibreMap ?: return hideFigure()
+        val loc = userLocation ?: return hideFigure()
+
+        val point = map.projection.toScreenLocation(loc)
+        val w = figureContainer.width.takeIf { it > 0 }?.toFloat() ?: dp(60f)
+        val h = figureContainer.height.takeIf { it > 0 }?.toFloat() ?: dp(78f)
+
+        val onScreen = point.x in 0f..mapView.width.toFloat() &&
+                point.y in 0f..mapView.height.toFloat()
+        if (!onScreen) {
+            hideFigure()
+            return
+        }
+
+        figureContainer.x = point.x - w / 2f
+        figureContainer.y = point.y - h        // anchor bottom (feet dot) at the point
+        if (figureContainer.visibility != View.VISIBLE) {
+            figureContainer.visibility = View.VISIBLE
+        }
+    }
+
+    private fun hideFigure() {
+        if (::figureContainer.isInitialized && figureContainer.visibility != View.GONE) {
+            figureContainer.visibility = View.GONE
+        }
+    }
+
+    private fun startFigureAnimation() {
+        if (figureAnimator != null) return
+        val bob = ObjectAnimator.ofFloat(walkingFigure, View.TRANSLATION_Y, 0f, -dp(5f)).apply {
+            duration = 420L
+            repeatMode = ObjectAnimator.REVERSE
+            repeatCount = ObjectAnimator.INFINITE
+        }
+        val tilt = ObjectAnimator.ofFloat(walkingFigure, View.ROTATION, -6f, 6f).apply {
+            duration = 420L
+            repeatMode = ObjectAnimator.REVERSE
+            repeatCount = ObjectAnimator.INFINITE
+        }
+        figureAnimator = AnimatorSet().apply {
+            playTogether(bob, tilt)
+            start()
+        }
+    }
+
+    private fun stopFigureAnimation() {
+        figureAnimator?.cancel()
+        figureAnimator = null
+        if (::walkingFigure.isInitialized) {
+            walkingFigure.translationY = 0f
+            walkingFigure.rotation = 0f
+        }
+    }
+
+    private fun dp(v: Float): Float = v * resources.displayMetrics.density
+
     private fun parseLatLng(s: String?): LatLng? {
         if (s.isNullOrBlank()) return null
         val parts = s.split(",")
@@ -474,11 +825,27 @@ class MapAndRoutesActivity : AppCompatActivity() {
     }
 
     override fun onStart()    { super.onStart();    mapView.onStart()  }
-    override fun onResume()   { super.onResume();   mapView.onResume() }
-    override fun onPause()    { mapView.onPause();  super.onPause()    }
+
+    override fun onResume() {
+        super.onResume()
+        mapView.onResume()
+        startLocationUpdates()
+        startFigureAnimation()
+    }
+
+    override fun onPause() {
+        stopLocationUpdates()
+        stopFigureAnimation()
+        mapView.onPause()
+        super.onPause()
+    }
+
     override fun onStop()     { super.onStop();     mapView.onStop()   }
 
     override fun onDestroy() {
+        searchHandler.removeCallbacksAndMessages(null)
+        stopLocationUpdates()
+        stopFigureAnimation()
         mapView.onDestroy()
         tileServer.stopServerSafely()
         super.onDestroy()

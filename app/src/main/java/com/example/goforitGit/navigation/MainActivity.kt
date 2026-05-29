@@ -5,6 +5,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
+import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -19,8 +22,10 @@ import androidx.navigation.ui.navigateUp
 import androidx.navigation.ui.setupActionBarWithNavController
 import androidx.navigation.ui.setupWithNavController
 import com.example.goforitGit.R
+import com.example.goforitGit.core.data.StepsData.StepBus
 import com.example.goforitGit.core.service.BleAdvertScanService
 import com.example.goforitGit.core.service.StepService
+import com.example.goforitGit.core.util.StepsUtils.StepCounterZC
 import com.example.goforitGit.core.util.FourHourBuckets.FourHourUploadScheduler
 import com.example.goforitGit.core.util.TrackingLifecycle.OnboardingPrefs
 import com.example.goforitGit.core.util.TrackingLifecycle.TrackingPermissions
@@ -741,6 +746,42 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
+        setupToolbarModeChip(navController)
+    }
+
+    // -------------------------------------------------------------------------
+    // Toolbar motion-mode chip (home screen only)
+    // -------------------------------------------------------------------------
+
+    private fun setupToolbarModeChip(navController: androidx.navigation.NavController) {
+        val chip = findViewById<View>(R.id.toolbarModeChip)
+        val chipText = findViewById<TextView>(R.id.toolbarModeText)
+        val chipIcon = findViewById<ImageView>(R.id.toolbarModeIcon)
+
+        // Only show it on the home (Steps) screen, to the right of the title.
+        navController.addOnDestinationChangedListener { _, destination, _ ->
+            chip.visibility = if (destination.id == R.id.nav_steps) View.VISIBLE else View.GONE
+        }
+
+        // StepBus.mode is a global StateFlow, so we can observe it here without
+        // coupling to the fragment.
+        lifecycleScope.launch {
+            StepBus.mode.collect { mode ->
+                chipText.text = "current mode: $mode"
+                chipIcon.setImageResource(modeIconRes(mode))
+            }
+        }
+    }
+
+    private fun modeIconRes(mode: StepCounterZC.MotionMode): Int = when (mode) {
+        StepCounterZC.MotionMode.UNKNOWN        -> R.drawable.ic_mode_unknown
+        StepCounterZC.MotionMode.STATIONARY     -> R.drawable.ic_mode_stationary
+        StepCounterZC.MotionMode.STANDING_STILL -> R.drawable.ic_mode_standing_still
+        StepCounterZC.MotionMode.WALKING        -> R.drawable.ic_mode_walking
+        StepCounterZC.MotionMode.RUNNING        -> R.drawable.ic_mode_running
+        StepCounterZC.MotionMode.CYCLING        -> R.drawable.ic_mode_cycling
+        StepCounterZC.MotionMode.DRIVING        -> R.drawable.ic_mode_driving
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

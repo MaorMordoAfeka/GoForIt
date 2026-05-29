@@ -10,16 +10,46 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- "You are here" walking figure. Positioned in code at the GPS point;
+         the feet dot marks the exact spot, the figure walks in place above it. -->
+    <FrameLayout
+        android:id="@+id/walkingFigureContainer"
+        android:layout_width="60dp"
+        android:layout_height="78dp"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/walkingFigure"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="12dp"
+            android:contentDescription="Your current location"
+            android:src="@drawable/ic_mode_walking"
+            app:tint="#202491" />
+
+        <View
+            android:layout_width="12dp"
+            android:layout_height="12dp"
+            android:layout_gravity="bottom|center_horizontal"
+            android:background="@drawable/bg_location_dot" />
+    </FrameLayout>
+
     <!-- Bottom sheet -->
     <androidx.core.widget.NestedScrollView
         android:id="@+id/routeSheet"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:fillViewport="true"
-        android:padding="12dp"
+        android:paddingStart="16dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="20dp"
         android:background="#CC000000"
         app:layout_behavior="com.google.android.material.bottomsheet.BottomSheetBehavior"
-        app:behavior_peekHeight="160dp"
+        app:behavior_peekHeight="190dp"
         app:behavior_hideable="false"
         app:behavior_fitToContents="false"
         app:behavior_halfExpandedRatio="0.45">
@@ -46,73 +76,104 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnShowH3"
+                    style="@style/Widget.MaterialComponents.Button"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
                     android:layout_marginEnd="4dp"
+                    android:layout_weight="1"
                     android:text="Show H3 Hexagons"
                     android:textSize="11sp"
-                    app:backgroundTint="#3F51B5"
-                    style="@style/Widget.MaterialComponents.Button" />
+                    app:backgroundTint="#3F51B5" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnClearH3"
+                    style="@style/Widget.MaterialComponents.Button"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="Clear Overlays"
                     android:textSize="11sp"
-                    app:backgroundTint="#757575"
-                    style="@style/Widget.MaterialComponents.Button" />
+                    app:backgroundTint="#757575" />
 
             </LinearLayout>
 
             <!-- Row 2: Show POIs -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnShowPoi"
+                style="@style/Widget.MaterialComponents.Button"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"
                 android:text="Show POIs (route reason)"
                 android:textSize="11sp"
-                app:backgroundTint="#00897B"
-                style="@style/Widget.MaterialComponents.Button" />
+                app:backgroundTint="#00897B" />
 
             <!-- Start -->
             <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/startInputLayout"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                app:boxBackgroundMode="outline"
-                app:boxStrokeColor="#88FFFFFF"
-                app:boxStrokeErrorColor="#FF6666"
-                app:hintTextColor="#88FFFFFF">
+                android:layout_marginTop="8dp"
+                app:boxBackgroundColor="#FFFFFF"
+                app:boxBackgroundMode="filled"
+                app:boxCornerRadiusBottomEnd="14dp"
+                app:boxCornerRadiusBottomStart="14dp"
+                app:boxCornerRadiusTopEnd="14dp"
+                app:boxCornerRadiusTopStart="14dp"
+                app:endIconMode="clear_text"
+                app:endIconTint="#5C5F7A"
+                app:hintEnabled="false">
 
-                <com.google.android.material.textfield.TextInputEditText
+                <com.google.android.material.textfield.MaterialAutoCompleteTextView
                     android:id="@+id/etStart"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:hint="Start (lat,lon) or tap map"
+                    android:completionThreshold="2"
+                    android:ellipsize="end"
+                    android:hint="Start — type a place or address"
                     android:inputType="text"
-                    android:textColor="#FFFFFF" />
+                    android:maxLines="1"
+                    android:minHeight="84dp"
+                    android:paddingTop="20dp"
+                    android:paddingBottom="20dp"
+                    android:singleLine="true"
+                    android:textColor="#1F2A44"
+                    android:textColorHint="#9AA0B0"
+                    android:textSize="18sp" />
             </com.google.android.material.textfield.TextInputLayout>
 
             <!-- Destination -->
             <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/destinationInputLayout"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                app:boxBackgroundMode="outline"
-                app:boxStrokeColor="#88FFFFFF"
-                app:boxStrokeErrorColor="#FF6666"
-                app:hintTextColor="#88FFFFFF">
+                android:layout_marginTop="24dp"
+                app:boxBackgroundColor="#FFFFFF"
+                app:boxBackgroundMode="filled"
+                app:boxCornerRadiusBottomEnd="14dp"
+                app:boxCornerRadiusBottomStart="14dp"
+                app:boxCornerRadiusTopEnd="14dp"
+                app:boxCornerRadiusTopStart="14dp"
+                app:endIconMode="clear_text"
+                app:endIconTint="#5C5F7A"
+                app:hintEnabled="false">
 
-                <com.google.android.material.textfield.TextInputEditText
+                <com.google.android.material.textfield.MaterialAutoCompleteTextView
                     android:id="@+id/etDest"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:hint="Destination (lat,lon) or tap map"
+                    android:completionThreshold="2"
+                    android:ellipsize="end"
+                    android:hint="Destination — type a place or address"
                     android:inputType="text"
-                    android:textColor="#FFFFFF" />
+                    android:maxLines="1"
+                    android:minHeight="84dp"
+                    android:paddingTop="20dp"
+                    android:paddingBottom="20dp"
+                    android:singleLine="true"
+                    android:textColor="#1F2A44"
+                    android:textColorHint="#9AA0B0"
+                    android:textSize="18sp" />
             </com.google.android.material.textfield.TextInputLayout>
 
             <TextView
@@ -202,10 +263,28 @@
         android:id="@+id/fabMenu"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_margin="16dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="178dp"
         android:contentDescription="Route options"
+        app:elevation="12dp"
         app:srcCompat="@android:drawable/ic_menu_sort_by_size"
         app:layout_anchor="@id/mapView"
         app:layout_anchorGravity="bottom|end" />
+
+    <!-- Recenter on my GPS location. Kept very visible over the map. -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabMyLocation"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="178dp"
+        android:contentDescription="Center on my location"
+        app:backgroundTint="#E91E63"
+        app:fabSize="normal"
+        app:rippleColor="#F48FB1"
+        app:srcCompat="@android:drawable/ic_menu_mylocation"
+        app:tint="#FFFFFF"
+        app:layout_anchor="@id/mapView"
+        app:layout_anchorGravity="bottom|start" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
