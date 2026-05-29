@@ -20,6 +20,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
+import com.example.goforitGit.core.data.StepsData.DailyStepsStore
 import com.example.goforitGit.core.data.StepsData.StepBus
 import com.example.goforitGit.core.data.StepsData.StepHistoryStore
 import com.example.goforitGit.core.util.FourHourBuckets.FourHourBucketsSinceBoot
@@ -120,6 +121,9 @@ class StepService : Service() {
 
     /** Polygon checker for college bonus. */
     private val collegeZoneChecker by lazy { CollegeZoneChecker(applicationContext) }
+
+    /** Per-day step-total history (powers the statistics screen's day stats). */
+    private val dailyStore by lazy { DailyStepsStore(applicationContext) }
 
     private var fgsStarted = false
     private var stepperStarted = false
@@ -392,11 +396,19 @@ class StepService : Service() {
 
         heartbeatJob = scope.launch {
             TrackingHeartbeat.markStepServiceAlive(applicationContext)
+            recordDailyTotal()
             while (isActive) {
                 delay(HEARTBEAT_INTERVAL_MS)
                 TrackingHeartbeat.markStepServiceAlive(applicationContext)
+                recordDailyTotal()
             }
         }
+    }
+
+    private fun recordDailyTotal() {
+        val todayKey = buckets.getTodayKey()
+        val total = buckets.getBucketsForDay(todayKey)?.sum() ?: return
+        dailyStore.record(todayKey, total)
     }
 
     /**

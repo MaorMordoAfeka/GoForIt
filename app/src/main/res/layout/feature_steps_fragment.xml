@@ -17,50 +17,31 @@
         android:paddingTop="40dp"
         android:paddingBottom="32dp">
 
-        <!-- Header -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+        <!-- Header: profile picture (tap to open profile) -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardHomeProfileImage"
+            android:layout_width="84dp"
+            android:layout_height="84dp"
+            android:layout_gravity="center_horizontal"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?attr/selectableItemBackgroundBorderless"
+            app:cardBackgroundColor="#F4F1FB"
+            app:cardCornerRadius="42dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#FFFFFF"
+            app:strokeWidth="2dp">
 
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Personal Dashboard"
-                android:textColor="#FFFFFF"
-                android:textSize="26sp"
-                android:textStyle="bold"
-                tools:ignore="HardcodedText" />
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_chip_white"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingHorizontal="12dp"
-                android:paddingVertical="6dp">
-
-                <TextView
-                    android:id="@+id/modeText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="6dp"
-                    android:text="current mode: UNKNOWN"
-                    android:textColor="#5C5F7A"
-                    android:textSize="12sp" />
-
-                <ImageView
-                    android:id="@+id/modeIcon"
-                    android:layout_width="16dp"
-                    android:layout_height="16dp"
-                    android:contentDescription="@null"
-                    android:src="@drawable/ic_mode_unknown"
-                    app:tint="#7C39A0" />
-            </LinearLayout>
-        </LinearLayout>
+            <ImageView
+                android:id="@+id/ivHomeProfileImage"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="Open profile"
+                android:padding="18dp"
+                android:scaleType="centerCrop"
+                android:src="@drawable/ic_person"
+                app:tint="#7C39A0" />
+        </com.google.android.material.card.MaterialCardView>
 
         <!-- Daily progress -->
         <com.google.android.material.card.MaterialCardView
@@ -329,7 +310,7 @@
             android:layout_width="match_parent"
             android:layout_height="52dp"
             android:layout_marginTop="20dp"
-            android:text="Statistics"
+            android:text="Statistics and Progress"
             android:textAllCaps="false"
             android:textColor="#FFFFFF"
             android:textSize="16sp"

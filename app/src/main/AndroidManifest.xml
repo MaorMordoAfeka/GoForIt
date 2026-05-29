@@ -76,7 +76,12 @@
             android:theme="@style/Theme.GoForIt.NoActionBar" />
         <activity
             android:name=".feature.map.ui.MapAndRoutesActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:theme="@style/Theme.GoForIt.NoActionBar" />
+        <activity
+            android:name=".feature.statistics.ui.StatisticsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.GoForIt.NoActionBar" />
 
         <!-- ===================================================== -->
         <!--                        Receivers                      -->

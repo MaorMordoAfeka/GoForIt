@@ -16,7 +16,42 @@
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             android:background="#63ABEF"
-            app:popupTheme="@style/Theme.GoForIt.PopupOverlay" />
+            app:popupTheme="@style/Theme.GoForIt.PopupOverlay">
+
+            <!-- Current motion mode, shown on the right of the home screen's bar -->
+            <LinearLayout
+                android:id="@+id/toolbarModeChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end|center_vertical"
+                android:layout_marginEnd="8dp"
+                android:background="@drawable/bg_chip_white"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="5dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/toolbarModeText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:text="current mode: UNKNOWN"
+                    android:textColor="#5C5F7A"
+                    android:textSize="12sp"
+                    tools:ignore="HardcodedText" />
+
+                <ImageView
+                    android:id="@+id/toolbarModeIcon"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_mode_unknown"
+                    app:tint="#7C39A0" />
+            </LinearLayout>
+
+        </androidx.appcompat.widget.Toolbar>
 
     </com.google.android.material.appbar.AppBarLayout>
 
