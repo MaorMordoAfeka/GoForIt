@@ -113,6 +113,7 @@ dependencies {
 
     // Lifecycle Kotlin
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation(libs.androidx.activity.ktx)
 
     // makes Task.await() work with coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")

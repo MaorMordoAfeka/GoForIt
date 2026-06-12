@@ -11,15 +11,20 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.goforitGit.R
+import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.feature.leaderboard.model.LeaderboardEntry
 import com.google.android.material.card.MaterialCardView
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -68,7 +73,10 @@ class LeaderboardActivity : AppCompatActivity() {
     private lateinit var cardPodiumSecond: MaterialCardView
     private lateinit var cardPodiumThird: MaterialCardView
 
-    private val adapter = LeaderboardAdapter()
+    private val adapter = LeaderboardAdapter(
+        onItemClick = { entry -> openCompetitorProfile(entry) }
+    )
+
     private val firestore by lazy { FirebaseFirestore.getInstance() }
     private val auth by lazy { FirebaseAuth.getInstance() }
 
@@ -82,6 +90,9 @@ class LeaderboardActivity : AppCompatActivity() {
 
     private var pendingScrollUid: String? = null
     private var pendingScrollRank: Int? = null
+
+    /** Prevents old async username/photo loads from overwriting a newer page/day. */
+    private var profileLoadGeneration = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -98,7 +109,7 @@ class LeaderboardActivity : AppCompatActivity() {
         setupRecycler()
         setupButtons()
         updateControls()
-        renderCurrentPage()
+        renderCurrentPage(scrollToTop = true)
 
         loadPageByIndex(0, showTopLoader = true)
     }
@@ -157,7 +168,7 @@ class LeaderboardActivity : AppCompatActivity() {
 
         btnSort.setOnClickListener {
             sortDescending = !sortDescending
-            renderCurrentPage()
+            renderCurrentPage(scrollToTop = true)
             updateControls()
         }
 
@@ -195,6 +206,7 @@ class LeaderboardActivity : AppCompatActivity() {
         currentPageIndex = 0
         pendingScrollUid = null
         pendingScrollRank = null
+        profileLoadGeneration++
         loadPageByIndex(0, showTopLoader = true)
     }
 
@@ -206,10 +218,12 @@ class LeaderboardActivity : AppCompatActivity() {
         currentPageIndex = 0
         pendingScrollUid = null
         pendingScrollRank = null
+        profileLoadGeneration++
         loadPageByIndex(0, showTopLoader = true)
     }
 
     private fun refreshCurrentPage() {
+        profileLoadGeneration++
         loadPageByIndex(currentPageIndex, showTopLoader = true)
     }
 
@@ -231,6 +245,7 @@ class LeaderboardActivity : AppCompatActivity() {
         progressBottom.visibility = if (showTopLoader) View.GONE else View.VISIBLE
         updateControls()
 
+        val requestedDayKey = dayKey
         val startRank = pageIndex * PAGE_SIZE + 1L
 
         var query = leaderboardQuery()
@@ -248,8 +263,13 @@ class LeaderboardActivity : AppCompatActivity() {
                 currentPageEntriesAsc = pageDocs.mapNotNull { it.toLeaderboardEntryOrNull() }
                 currentPageIndex = pageIndex
 
-                renderCurrentPage()
+                renderCurrentPage(scrollToTop = true)
                 handlePendingScrollIfNeeded()
+                enrichCurrentPageWithPublicProfiles(
+                    entriesSnapshot = currentPageEntriesAsc,
+                    expectedDayKey = requestedDayKey,
+                    expectedPageIndex = pageIndex
+                )
             }
             .addOnFailureListener { e ->
                 Toast.makeText(
@@ -266,7 +286,54 @@ class LeaderboardActivity : AppCompatActivity() {
             }
     }
 
-    private fun renderCurrentPage() {
+    private fun enrichCurrentPageWithPublicProfiles(
+        entriesSnapshot: List<LeaderboardEntry>,
+        expectedDayKey: String,
+        expectedPageIndex: Int
+    ) {
+        val targets = entriesSnapshot
+            .filter { it.uid.isNotBlank() }
+            .filter { it.username.isBlank() || it.profileImageUrl.isBlank() || it.faculty.isBlank() }
+            .distinctBy { it.uid }
+
+        if (targets.isEmpty()) return
+
+        val generation = ++profileLoadGeneration
+
+        lifecycleScope.launch {
+            val profilesByUid = targets
+                .map { entry ->
+                    async {
+                        FirebaseServerApi.getPublicUserProfileResult(entry.uid).getOrNull()
+                    }
+                }
+                .awaitAll()
+                .filterNotNull()
+                .associateBy { it.uid }
+
+            if (generation != profileLoadGeneration) return@launch
+            if (dayKey != expectedDayKey || currentPageIndex != expectedPageIndex) return@launch
+            if (profilesByUid.isEmpty()) return@launch
+
+            currentPageEntriesAsc = currentPageEntriesAsc.map { entry ->
+                val profile = profilesByUid[entry.uid]
+                if (profile == null) {
+                    entry
+                } else {
+                    entry.copy(
+                        username = profile.username.ifBlank { entry.username },
+                        profileImageUrl = profile.profileImageUrl.ifBlank { entry.profileImageUrl },
+                        faculty = profile.faculty.ifBlank { entry.faculty }
+                    )
+                }
+            }
+
+            renderCurrentPage(scrollToTop = false)
+            updateControls()
+        }
+    }
+
+    private fun renderCurrentPage(scrollToTop: Boolean) {
         val podiumEntries = podiumEntriesForCurrentPage()
         renderPodium(podiumEntries)
 
@@ -279,7 +346,7 @@ class LeaderboardActivity : AppCompatActivity() {
 
         if (hasListItems) {
             cardList.visibility = View.VISIBLE
-            recyclerView.scrollToPosition(0)
+            if (scrollToTop) recyclerView.scrollToPosition(0)
         } else {
             cardList.visibility = View.GONE
         }
@@ -356,10 +423,14 @@ class LeaderboardActivity : AppCompatActivity() {
     ) {
         if (entry == null) {
             card.visibility = View.INVISIBLE
+            card.setOnClickListener(null)
             return
         }
 
         card.visibility = View.VISIBLE
+        card.isClickable = true
+        card.isFocusable = true
+        card.setOnClickListener { openCompetitorProfile(entry) }
 
         val rankId = when (card.id) {
             R.id.cardPodiumFirst -> R.id.tvPodiumRank1
@@ -371,7 +442,7 @@ class LeaderboardActivity : AppCompatActivity() {
             R.id.cardPodiumSecond -> R.id.tvPodiumBadge2
             else -> R.id.tvPodiumBadge3
         }
-        val uidId = when (card.id) {
+        val usernameId = when (card.id) {
             R.id.cardPodiumFirst -> R.id.tvPodiumUid1
             R.id.cardPodiumSecond -> R.id.tvPodiumUid2
             else -> R.id.tvPodiumUid3
@@ -392,17 +463,19 @@ class LeaderboardActivity : AppCompatActivity() {
             text = if (entry.rank > 0) "#${entry.rank}" else fallbackRank
             setTextColor(Color.parseColor(accentColor))
         }
-        card.findViewById<TextView>(uidId).text = podiumLabel(entry)
+        card.findViewById<TextView>(usernameId).text = podiumLabel(entry)
         card.findViewById<TextView>(pointsId).text = "${entry.totalPoints} pts"
         card.findViewById<TextView>(facultyId).text = entry.faculty.ifBlank { "General" }
     }
 
     private fun podiumLabel(entry: LeaderboardEntry): String {
-        val uid = auth.currentUser?.uid
-        return if (uid != null && uid == entry.uid) {
-            "You • ${maskUid(entry.uid)}"
+        val isYou = auth.currentUser?.uid == entry.uid
+        val username = entry.username.ifBlank { "Loading profile…" }
+
+        return if (isYou) {
+            if (entry.username.isBlank()) "You" else "You \n $username"
         } else {
-            maskUid(entry.uid)
+            username
         }
     }
 
@@ -450,7 +523,7 @@ class LeaderboardActivity : AppCompatActivity() {
 
         val podiumHit = podiumEntriesForCurrentPage().firstOrNull { it.uid == uid }
         if (podiumHit != null) {
-            toast("You are on the podium at #${podiumHit.rank}")
+            openCompetitorProfile(podiumHit)
             return
         }
 
@@ -540,9 +613,14 @@ class LeaderboardActivity : AppCompatActivity() {
         pendingScrollRank = null
     }
 
-    private fun maskUid(uid: String): String {
-        if (uid.length <= 10) return uid
-        return "${uid.take(6)}...${uid.takeLast(4)}"
+    private fun openCompetitorProfile(entry: LeaderboardEntry) {
+        startActivity(
+            CompetitorProfileActivity.createIntent(
+                context = this,
+                entry = entry,
+                dayKey = dayKey
+            )
+        )
     }
 
     private fun toast(message: String) {
@@ -555,7 +633,23 @@ class LeaderboardActivity : AppCompatActivity() {
         val totalPoints = getLong("totalPoints")?.toInt() ?: 0
         val totalSteps = getLong("totalSteps")?.toInt() ?: 0
         val bonusPoints = getLong("bonusPoints")?.toInt() ?: 0
-        val faculty = getString("faculty").orEmpty()
+
+        val faculty = firstNonBlank(
+            getString("faculty"),
+            getString("department")
+        )
+
+        val username = firstNonBlank(
+            getString("username"),
+            getString("displayName"),
+            getString("name")
+        )
+
+        val profileImageUrl = firstNonBlank(
+            getString("profileImageUrl"),
+            getString("photoUrl"),
+            getString("profilePhotoUrl")
+        )
 
         return LeaderboardEntry(
             uid = uid,
@@ -563,7 +657,13 @@ class LeaderboardActivity : AppCompatActivity() {
             totalPoints = totalPoints,
             totalSteps = totalSteps,
             bonusPoints = bonusPoints,
-            faculty = faculty
+            faculty = faculty,
+            username = username,
+            profileImageUrl = profileImageUrl
         )
+    }
+
+    private fun firstNonBlank(vararg values: String?): String {
+        return values.firstOrNull { !it.isNullOrBlank() }.orEmpty()
     }
 }

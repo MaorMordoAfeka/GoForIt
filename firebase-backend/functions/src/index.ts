@@ -297,6 +297,11 @@ type LeaderboardRow = {
   totalPoints: number;
   totalSteps: number;
   bonusPoints: number;
+
+  // Public profile fields that are safe to show on the leaderboard
+  // and on the read-only competitor profile screen.
+  username: string;
+  profileImageUrl: string;
   faculty: string;
 };
 
@@ -331,7 +336,14 @@ async function writeLeaderboardForDay(dayKey: string, leaderboard: LeaderboardRo
         totalSteps: e.totalSteps,
         bonusPoints: e.bonusPoints,
         rank: idx + 1,
+
+        // Public profile snapshot.
+        // This intentionally excludes private fields such as email, timezone,
+        // quiet hours, reminder preferences, and notification settings.
+        username: e.username,
+        profileImageUrl: e.profileImageUrl,
         faculty: e.faculty,
+
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
 
@@ -360,6 +372,10 @@ async function recalculateLeaderboardForDay(dayKey: string): Promise<void> {
   for (const u of usersSnap.docs) {
     const uid = u.id;
     const userData = u.data() ?? {};
+
+    const username = typeof userData.username === "string" ? userData.username : "";
+    const profileImageUrl =
+      typeof userData.profileImageUrl === "string" ? userData.profileImageUrl : "";
     const faculty = typeof userData.faculty === "string" ? userData.faculty : "";
 
     const dailySnap = await db.doc(`users/${uid}/daily/${dayKey}`).get();
@@ -376,6 +392,8 @@ async function recalculateLeaderboardForDay(dayKey: string): Promise<void> {
       totalPoints,
       totalSteps,
       bonusPoints,
+      username,
+      profileImageUrl,
       faculty,
     });
   }
@@ -557,6 +575,44 @@ async function getUserProfile(uid: string): Promise<{
   };
 }
 
+async function updatePublicProfileSnapshotInRecentLeaderboards(
+  uid: string,
+  publicFields: { username: string; profileImageUrl: string; faculty: string },
+  daysBack = 14
+): Promise<void> {
+  const now = DateTime.now().setZone(DEFAULT_TZ);
+  const refs: admin.firestore.DocumentReference[] = [];
+
+  for (let i = 0; i <= daysBack; i++) {
+    const dayKey = toDayKey(now.minus({ days: i }));
+    refs.push(db.doc(`leaderboards_daily/${dayKey}/entries/${uid}`));
+  }
+
+  const snaps = await db.getAll(...refs);
+  const batch = db.batch();
+  let writes = 0;
+
+  for (const snap of snaps) {
+    if (!snap.exists) continue;
+
+    batch.set(
+      snap.ref,
+      {
+        username: publicFields.username,
+        profileImageUrl: publicFields.profileImageUrl,
+        faculty: publicFields.faculty,
+        publicProfileUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    writes++;
+  }
+
+  if (writes > 0) {
+    await batch.commit();
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Auth trigger
 // -----------------------------------------------------------------------------
@@ -648,6 +704,39 @@ export const getMyProfile = onCall({ region: FUNCTIONS_REGION }, async (request)
   return {
     ok: true,
     ...profile,
+  };
+});
+
+// -----------------------------------------------------------------------------
+// Callable: getPublicUserProfile
+// -----------------------------------------------------------------------------
+
+export const getPublicUserProfile = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  requireUid(request);
+
+  const targetUidRaw = request.data?.uid as unknown;
+  const targetUid = typeof targetUidRaw === "string" ? targetUidRaw.trim() : "";
+
+  if (targetUid.length === 0 || targetUid.length > 128) {
+    throw new HttpsError("invalid-argument", "uid is required.");
+  }
+
+  const snap = await db.doc(`users/${targetUid}`).get();
+  if (!snap.exists) {
+    throw new HttpsError("not-found", "Public profile was not found.");
+  }
+
+  const data = snap.data() ?? {};
+
+  return {
+    ok: true,
+    uid: targetUid,
+
+    // Public fields only. Do not add email, timezone, quiet hours, reminder
+    // preferences, FCM tokens, or any private account data here.
+    username: typeof data.username === "string" ? data.username : "",
+    profileImageUrl: typeof data.profileImageUrl === "string" ? data.profileImageUrl : "",
+    faculty: typeof data.faculty === "string" ? data.faculty : "",
   };
 });
 
@@ -762,6 +851,16 @@ export const updateMyProfile = onCall({ region: FUNCTIONS_REGION }, async (reque
   });
 
   const updated = await getUserProfile(uid);
+
+  try {
+    await updatePublicProfileSnapshotInRecentLeaderboards(uid, {
+      username: updated.username,
+      profileImageUrl: updated.profileImageUrl,
+      faculty: updated.faculty,
+    });
+  } catch (err) {
+    logger.error(`updateMyProfile: failed to refresh public leaderboard snapshots for ${uid}`, err);
+  }
 
   return {
     ok: true,
@@ -1220,7 +1319,15 @@ export const finalizeDay = onSchedule(
       );
 
       const totalPoints = calcStepPoints(totalSteps) + bonusPoints;
-      leaderboard.push({ uid, totalPoints, totalSteps, bonusPoints, faculty: profile.faculty });
+      leaderboard.push({
+        uid,
+        totalPoints,
+        totalSteps,
+        bonusPoints,
+        username: profile.username,
+        profileImageUrl: profile.profileImageUrl,
+        faculty: profile.faculty,
+      });
     }
 
     leaderboard.sort(compareLeaderboardRows);

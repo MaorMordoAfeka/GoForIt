@@ -6,5 +6,7 @@ data class LeaderboardEntry(
     val totalPoints: Int = 0,
     val totalSteps: Int = 0,
     val bonusPoints: Int = 0,
-    val faculty: String = ""
+    val faculty: String = "",
+    val username: String = "",
+    val profileImageUrl: String = ""
 )

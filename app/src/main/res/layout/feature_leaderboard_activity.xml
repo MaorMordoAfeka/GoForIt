@@ -152,8 +152,12 @@
 
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardPodiumSecond"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:foreground="?attr/selectableItemBackground"
                         android:layout_width="0dp"
-                        android:layout_height="164dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="198dp"
                         android:layout_marginEnd="8dp"
                         android:layout_weight="1"
                         app:cardBackgroundColor="#F8FAFF"
@@ -164,10 +168,11 @@
 
                         <LinearLayout
                             android:layout_width="match_parent"
-                            android:layout_height="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="190dp"
                             android:gravity="center_horizontal"
                             android:orientation="vertical"
-                            android:padding="14dp">
+                            android:padding="12dp">
 
                             <TextView
                                 android:id="@+id/tvPodiumBadge2"
@@ -193,10 +198,10 @@
                                 android:layout_marginTop="8dp"
                                 android:ellipsize="end"
                                 android:gravity="center"
-                                android:maxLines="1"
-                                android:text="uid"
+                                android:maxLines="2"
+                                android:text="Username"
                                 android:textColor="#1F2A44"
-                                android:textSize="13sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold" />
 
                             <TextView
@@ -214,18 +219,23 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="6dp"
+                                android:ellipsize="end"
                                 android:gravity="center"
                                 android:maxLines="2"
                                 android:text="General"
                                 android:textColor="#7B8197"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
 
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardPodiumFirst"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:foreground="?attr/selectableItemBackground"
                         android:layout_width="0dp"
-                        android:layout_height="180dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="214dp"
                         android:layout_marginStart="4dp"
                         android:layout_marginEnd="4dp"
                         android:layout_weight="1"
@@ -237,10 +247,11 @@
 
                         <LinearLayout
                             android:layout_width="match_parent"
-                            android:layout_height="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="206dp"
                             android:gravity="center_horizontal"
                             android:orientation="vertical"
-                            android:padding="14dp">
+                            android:padding="12dp">
 
                             <TextView
                                 android:id="@+id/tvPodiumBadge1"
@@ -266,10 +277,10 @@
                                 android:layout_marginTop="8dp"
                                 android:ellipsize="end"
                                 android:gravity="center"
-                                android:maxLines="1"
-                                android:text="uid"
+                                android:maxLines="2"
+                                android:text="Username"
                                 android:textColor="#1F2A44"
-                                android:textSize="14sp"
+                                android:textSize="13sp"
                                 android:textStyle="bold" />
 
                             <TextView
@@ -287,18 +298,23 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="6dp"
+                                android:ellipsize="end"
                                 android:gravity="center"
                                 android:maxLines="2"
                                 android:text="General"
                                 android:textColor="#7B8197"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
 
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardPodiumThird"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:foreground="?attr/selectableItemBackground"
                         android:layout_width="0dp"
-                        android:layout_height="164dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="198dp"
                         android:layout_marginStart="8dp"
                         android:layout_weight="1"
                         app:cardBackgroundColor="#FFF8F3"
@@ -309,10 +325,11 @@
 
                         <LinearLayout
                             android:layout_width="match_parent"
-                            android:layout_height="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="190dp"
                             android:gravity="center_horizontal"
                             android:orientation="vertical"
-                            android:padding="14dp">
+                            android:padding="12dp">
 
                             <TextView
                                 android:id="@+id/tvPodiumBadge3"
@@ -338,10 +355,10 @@
                                 android:layout_marginTop="8dp"
                                 android:ellipsize="end"
                                 android:gravity="center"
-                                android:maxLines="1"
-                                android:text="uid"
+                                android:maxLines="2"
+                                android:text="Username"
                                 android:textColor="#1F2A44"
-                                android:textSize="13sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold" />
 
                             <TextView
@@ -359,11 +376,12 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="6dp"
+                                android:ellipsize="end"
                                 android:gravity="center"
                                 android:maxLines="2"
                                 android:text="General"
                                 android:textColor="#7B8197"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
                 </LinearLayout>

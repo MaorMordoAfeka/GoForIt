@@ -84,6 +84,17 @@ object FirebaseServerApi {
         val cumulativeBonusPoints: Int,
     )
 
+    /**
+     * Public-safe profile fields used by leaderboard and competitor profile screens.
+     * Do not add email, timezone, quiet hours, notification settings, or other private data here.
+     */
+    data class PublicUserProfile(
+        val uid: String,
+        val username: String,
+        val profileImageUrl: String,
+        val faculty: String,
+    )
+
     // -------------------------------------------------------------------------
     // AUTH (Email/Password)
     // -------------------------------------------------------------------------
@@ -179,6 +190,15 @@ object FirebaseServerApi {
         )
     }
 
+    private fun mapToPublicUserProfile(map: Map<*, *>, fallbackUid: String): PublicUserProfile {
+        return PublicUserProfile(
+            uid = map["uid"] as? String ?: fallbackUid,
+            username = map["username"] as? String ?: "",
+            profileImageUrl = map["profileImageUrl"] as? String ?: "",
+            faculty = map["faculty"] as? String ?: "",
+        )
+    }
+
     // -------------------------------------------------------------------------
     // PUSH NOTIFICATIONS (FCM token registration)
     // -------------------------------------------------------------------------
@@ -204,6 +224,35 @@ object FirebaseServerApi {
     // -------------------------------------------------------------------------
     // PROFILE
     // -------------------------------------------------------------------------
+
+    /**
+     * Loads a public-safe profile for another user.
+     *
+     * Expected callable: getPublicUserProfile
+     * Allowed response fields only: uid, username, profileImageUrl, faculty.
+     */
+    suspend fun getPublicUserProfileResult(uid: String): Result<PublicUserProfile> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            require(uid.isNotBlank()) { "uid is required." }
+
+            val res = functions.getHttpsCallable("getPublicUserProfile")
+                .call(mapOf("uid" to uid))
+                .await()
+
+            val map = res.data as? Map<*, *>
+                ?: error("getPublicUserProfile returned invalid payload.")
+
+            val ok = map["ok"] as? Boolean ?: false
+            if (!ok) error("getPublicUserProfile returned ok=false.")
+
+            mapToPublicUserProfile(map, uid)
+        }
+    }
 
     /**
      * Loads the current user's editable profile from the server.
