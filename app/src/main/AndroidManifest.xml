@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-
+    xmlns:tools="http://schemas.android.com/tools" >
     <!-- ========================================================= -->
-    <!--                         Permissions                       -->
+    <!-- Permissions -->
     <!-- ========================================================= -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> <!-- Boot / persistence -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" /> <!-- Activity recognition + sensors -->
@@ -43,10 +42,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.GoForIt"
         android:usesCleartextTraffic="true"
-        tools:replace="android:name">
-
+        tools:replace="android:name" >
+        <activity
+            android:name=".feature.leaderboard.ui.CompetitorProfileActivity"
+            android:exported="false"
+            android:theme="@style/Theme.GoForIt" />
         <!-- ===================================================== -->
-        <!--                       Activities                      -->
+        <!-- Activities -->
         <!-- ===================================================== -->
         <activity
             android:name=".feature.profile.ui.ProfileActivity"
@@ -62,7 +64,7 @@
         <activity
             android:name=".feature.auth.ui.LoginActivity"
             android:exported="true"
-            android:theme="@style/Theme.GoForIt.NoActionBar">
+            android:theme="@style/Theme.GoForIt.NoActionBar" >
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
@@ -81,23 +83,19 @@
         <activity
             android:name=".feature.statistics.ui.StatisticsActivity"
             android:exported="false"
-            android:theme="@style/Theme.GoForIt.NoActionBar" />
-
-        <!-- ===================================================== -->
-        <!--                        Receivers                      -->
+            android:theme="@style/Theme.GoForIt.NoActionBar" /> <!-- ===================================================== -->
+        <!-- Receivers -->
         <!-- ===================================================== -->
         <receiver
             android:name=".core.util.Receivers.BootReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="true" >
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
-        </receiver>
-
-        <!-- ===================================================== -->
-        <!--                        Services                       -->
+        </receiver> <!-- ===================================================== -->
+        <!-- Services -->
         <!-- ===================================================== -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
@@ -113,7 +111,7 @@
             android:foregroundServiceType="connectedDevice" />
         <service
             android:name=".core.data.FirebaseData.firebaseMessagingService"
-            android:exported="false">
+            android:exported="false" >
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
