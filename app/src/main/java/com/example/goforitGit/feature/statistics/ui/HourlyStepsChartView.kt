@@ -9,15 +9,20 @@ import android.util.AttributeSet
 import android.view.View
 import java.util.Locale
 import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.pow
 
 /**
  * Simple bar chart for the day's steps split into 4-hour windows.
  *
  * X axis  = time-of-day window (labels supplied by caller, e.g. "0-4").
- * Y axis  = steps. Auto-scales to the data, with a labelled gridline every
- *           [Y_INTERVAL] (100), and a minimum top of [MIN_MAX_Y] so there is
- *           always a 100 mark in the middle.
+ * Y axis  = steps. Auto-scales to the data and chooses a **"nice" tick step**
+ *           (1 / 2 / 2.5 / 5 × 10ⁿ) so the gridline density stays around
+ *           [TARGET_TICKS] (~6) regardless of magnitude — a few hundred steps
+ *           draws a label every 50–200, while 30,000 steps draws a label every
+ *           5,000. Minimum top of [MIN_MAX_Y] keeps an idle day legible.
  *
  * Dependency-free (plain Canvas) so it matches the app's hand-built UI.
  */
@@ -75,12 +80,15 @@ class HourlyStepsChartView @JvmOverloads constructor(
         if (plotHeight <= 0 || plotWidth <= 0) return
 
         val maxValue = values.maxOrNull() ?: 0
-        // Auto-scale up to the next 100, with a floor so there's always a 100
-        // mark in the middle, plus one interval of headroom above the tallest bar.
-        var maxY = max(MIN_MAX_Y, ceil(maxValue.toDouble() / Y_INTERVAL).toInt() * Y_INTERVAL)
-        if (maxY == maxValue) maxY += Y_INTERVAL
 
-        // Gridlines + labels every 100.
+        // Pick a "nice" tick step (1/2/2.5/5 × 10ⁿ) so the chart shows roughly
+        // TARGET_TICKS labels no matter how high the step count climbs.
+        val rawStep = max(maxValue.toDouble(), MIN_MAX_Y.toDouble()) / TARGET_TICKS
+        val step = niceStep(rawStep).coerceAtLeast(1)
+        var maxY = max(MIN_MAX_Y, ceil(maxValue.toDouble() / step).toInt() * step)
+        if (maxY == maxValue) maxY += step  // one interval of headroom above the tallest bar
+
+        // Gridlines + labels at every `step`.
         var grid = 0
         while (grid <= maxY) {
             val y = plotBottom - (grid.toFloat() / maxY) * plotHeight
@@ -91,7 +99,7 @@ class HourlyStepsChartView @JvmOverloads constructor(
                 y + dp(3.5f),
                 axisLabelPaint
             )
-            grid += Y_INTERVAL
+            grid += step
         }
 
         // Bars.
@@ -118,7 +126,28 @@ class HourlyStepsChartView @JvmOverloads constructor(
     }
 
     companion object {
-        private const val Y_INTERVAL = 100
+        /** Aim for this many y-axis labels — adjusts as the value range grows. */
+        private const val TARGET_TICKS = 6
+
+        /** Minimum top of the y-axis so an idle day still draws a sensible scale. */
         private const val MIN_MAX_Y = 200
+
+        /**
+         * Round [raw] up to the next "nice" round number: 1, 2, 2.5, 5 × 10ⁿ.
+         * Keeps tick labels human-readable across every order of magnitude.
+         */
+        private fun niceStep(raw: Double): Int {
+            if (raw <= 0.0) return 1
+            val magnitude = 10.0.pow(floor(log10(raw)))
+            val normalized = raw / magnitude
+            val niceNormalized = when {
+                normalized <= 1.0 -> 1.0
+                normalized <= 2.0 -> 2.0
+                normalized <= 2.5 -> 2.5
+                normalized <= 5.0 -> 5.0
+                else              -> 10.0
+            }
+            return (niceNormalized * magnitude).toInt().coerceAtLeast(1)
+        }
     }
 }
