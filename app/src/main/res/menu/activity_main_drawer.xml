@@ -5,30 +5,40 @@
 
         <item
             android:id="@+id/nav_steps"
-            android:icon="@drawable/ic_menu_steps"
-            android:title="Steps" />
-
-        <item
-            android:id="@+id/nav_home"
             android:icon="@drawable/ic_menu_home"
             android:title="Home" />
 
         <item
-            android:id="@+id/nav_gallery"
-            android:icon="@drawable/ic_menu_gallery"
-            android:title="Gallery" />
+            android:id="@+id/nav_statistics"
+            android:icon="@drawable/ic_menu_steps"
+            android:title="Statistics &amp; progress" />
 
         <item
-            android:id="@+id/nav_slideshow"
-            android:icon="@drawable/ic_menu_slideshow"
-            android:title="Slideshow" />
+            android:id="@+id/nav_map"
+            android:icon="@drawable/ic_menu_mylocation"
+            android:title="Map &amp; routes" />
+
+        <item
+            android:id="@+id/nav_leaderboard"
+            android:icon="@drawable/ic_menu_sort_by_size"
+            android:title="Leaderboard" />
+
+        <item
+            android:id="@+id/nav_profile"
+            android:icon="@drawable/ic_person"
+            android:title="Profile" />
 
     </group>
 
-    <!-- Sign out is NOT a navigation destination, handled separately -->
-    <item
-        android:id="@+id/nav_sign_out"
-        android:icon="@drawable/ic_menu_sign_out"
-        android:title="Sign out" />
+    <item android:title="ACCOUNT">
+
+        <menu>
+            <item
+                android:id="@+id/nav_sign_out"
+                android:icon="@drawable/ic_menu_sign_out"
+                android:title="Sign out" />
+        </menu>
+
+    </item>
 
 </menu>

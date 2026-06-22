@@ -2,11 +2,12 @@ package com.example.goforitGit.feature.statistics.ui
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import androidx.core.content.ContextCompat
+import com.example.goforitGit.R
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -15,16 +16,17 @@ import kotlin.math.max
 import kotlin.math.pow
 
 /**
- * Simple bar chart for the day's steps split into 4-hour windows.
+ * Bar chart for today's steps split into 4-hour windows.
  *
- * X axis  = time-of-day window (labels supplied by caller, e.g. "0-4").
- * Y axis  = steps. Auto-scales to the data and chooses a **"nice" tick step**
- *           (1 / 2 / 2.5 / 5 × 10ⁿ) so the gridline density stays around
- *           [TARGET_TICKS] (~6) regardless of magnitude — a few hundred steps
- *           draws a label every 50–200, while 30,000 steps draws a label every
- *           5,000. Minimum top of [MIN_MAX_Y] keeps an idle day legible.
+ * X axis:
+ * - 0–4, 4–8, 8–12, 12–16, 16–20, 20–24
  *
- * Dependency-free (plain Canvas) so it matches the app's hand-built UI.
+ * Y axis:
+ * - Automatically chooses a readable "nice" interval based on the real values.
+ * - Example for 52,027 steps:
+ *   0 / 20k / 40k / 60k
+ *
+ * This avoids drawing hundreds of 100-step tick labels on top of each other.
  */
 class HourlyStepsChartView @JvmOverloads constructor(
     context: Context,
@@ -36,22 +38,30 @@ class HourlyStepsChartView @JvmOverloads constructor(
     private var labels: List<String> = emptyList()
 
     private val density = resources.displayMetrics.density
-    private fun dp(v: Float) = v * density
 
-    private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#7C39A0")
+    private fun dp(value: Float): Float = value * density
+
+    private val barPurple = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = ContextCompat.getColor(context, R.color.brand_purple)
     }
+
+    private val barMint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = ContextCompat.getColor(context, R.color.brand_mint_strong)
+    }
+
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#D8D2E6")
+        color = ContextCompat.getColor(context, R.color.divider)
         strokeWidth = dp(1f)
     }
+
     private val axisLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#7B8197")
+        color = ContextCompat.getColor(context, R.color.text_muted)
         textSize = dp(10f)
         textAlign = Paint.Align.RIGHT
     }
+
     private val xLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#5C5F7A")
+        color = ContextCompat.getColor(context, R.color.text_muted)
         textSize = dp(11f)
         textAlign = Paint.Align.CENTER
     }
@@ -64,90 +74,210 @@ class HourlyStepsChartView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+
         if (values.isEmpty()) return
 
-        val leftPad = dp(40f)   // room for y labels like "10,000"
+        val leftPad = dp(48f)
         val rightPad = dp(8f)
         val topPad = dp(10f)
-        val bottomPad = dp(22f) // room for x labels
+        val bottomPad = dp(24f)
 
         val plotLeft = leftPad
         val plotRight = width - rightPad
         val plotTop = topPad
         val plotBottom = height - bottomPad
+
         val plotHeight = plotBottom - plotTop
         val plotWidth = plotRight - plotLeft
-        if (plotHeight <= 0 || plotWidth <= 0) return
 
-        val maxValue = values.maxOrNull() ?: 0
+        if (plotHeight <= 0f || plotWidth <= 0f) return
 
-        // Pick a "nice" tick step (1/2/2.5/5 × 10ⁿ) so the chart shows roughly
-        // TARGET_TICKS labels no matter how high the step count climbs.
-        val rawStep = max(maxValue.toDouble(), MIN_MAX_Y.toDouble()) / TARGET_TICKS
-        val step = niceStep(rawStep).coerceAtLeast(1)
-        var maxY = max(MIN_MAX_Y, ceil(maxValue.toDouble() / step).toInt() * step)
-        if (maxY == maxValue) maxY += step  // one interval of headroom above the tallest bar
+        val maxValue = values.maxOrNull()?.coerceAtLeast(0) ?: 0
+        val axis = calculateAxis(maxValue)
 
-        // Gridlines + labels at every `step`.
-        var grid = 0
-        while (grid <= maxY) {
-            val y = plotBottom - (grid.toFloat() / maxY) * plotHeight
-            canvas.drawLine(plotLeft, y, plotRight, y, gridPaint)
+        drawGrid(
+            canvas = canvas,
+            plotLeft = plotLeft,
+            plotRight = plotRight,
+            plotBottom = plotBottom,
+            plotHeight = plotHeight,
+            maxY = axis.maxY,
+            interval = axis.interval
+        )
+
+        drawBars(
+            canvas = canvas,
+            plotLeft = plotLeft,
+            plotBottom = plotBottom,
+            plotHeight = plotHeight,
+            plotWidth = plotWidth,
+            maxY = axis.maxY
+        )
+    }
+
+    private fun drawGrid(
+        canvas: Canvas,
+        plotLeft: Float,
+        plotRight: Float,
+        plotBottom: Float,
+        plotHeight: Float,
+        maxY: Int,
+        interval: Int
+    ) {
+        var value = 0
+
+        while (value <= maxY) {
+            val y = plotBottom - (value.toFloat() / maxY.toFloat()) * plotHeight
+
+            canvas.drawLine(
+                plotLeft,
+                y,
+                plotRight,
+                y,
+                gridPaint
+            )
+
             canvas.drawText(
-                String.format(Locale.US, "%,d", grid),
-                plotLeft - dp(4f),
+                formatAxisValue(value),
+                plotLeft - dp(6f),
                 y + dp(3.5f),
                 axisLabelPaint
             )
-            grid += step
-        }
 
-        // Bars.
-        val n = values.size
-        val slot = plotWidth / n
-        val barWidth = slot * 0.55f
-        for (i in 0 until n) {
-            val v = values[i].coerceAtLeast(0)
-            val barHeight = (v.toFloat() / maxY) * plotHeight
-            val cx = plotLeft + slot * i + slot / 2f
-            val barLeft = cx - barWidth / 2f
-            val barRight = cx + barWidth / 2f
-            val barTop = plotBottom - barHeight
-
-            if (barHeight > 0f) {
-                val rect = RectF(barLeft, barTop, barRight, plotBottom)
-                val r = dp(4f)
-                canvas.drawRoundRect(rect, r, r, barPaint)
-            }
-
-            val label = labels.getOrNull(i) ?: ""
-            canvas.drawText(label, cx, plotBottom + dp(15f), xLabelPaint)
+            value += interval
         }
     }
 
-    companion object {
-        /** Aim for this many y-axis labels — adjusts as the value range grows. */
-        private const val TARGET_TICKS = 6
+    private fun drawBars(
+        canvas: Canvas,
+        plotLeft: Float,
+        plotBottom: Float,
+        plotHeight: Float,
+        plotWidth: Float,
+        maxY: Int
+    ) {
+        val count = values.size
+        if (count == 0) return
 
-        /** Minimum top of the y-axis so an idle day still draws a sensible scale. */
-        private const val MIN_MAX_Y = 200
+        val slotWidth = plotWidth / count
+        val barWidth = slotWidth * 0.55f
 
-        /**
-         * Round [raw] up to the next "nice" round number: 1, 2, 2.5, 5 × 10ⁿ.
-         * Keeps tick labels human-readable across every order of magnitude.
-         */
-        private fun niceStep(raw: Double): Int {
-            if (raw <= 0.0) return 1
-            val magnitude = 10.0.pow(floor(log10(raw)))
-            val normalized = raw / magnitude
-            val niceNormalized = when {
-                normalized <= 1.0 -> 1.0
-                normalized <= 2.0 -> 2.0
-                normalized <= 2.5 -> 2.5
-                normalized <= 5.0 -> 5.0
-                else              -> 10.0
+        for (index in values.indices) {
+            val value = values[index].coerceAtLeast(0)
+            val barHeight = (value.toFloat() / maxY.toFloat()) * plotHeight
+
+            val centerX = plotLeft + slotWidth * index + slotWidth / 2f
+            val barLeft = centerX - barWidth / 2f
+            val barRight = centerX + barWidth / 2f
+            val barTop = plotBottom - barHeight
+
+            if (barHeight > 0f) {
+                val rect = RectF(
+                    barLeft,
+                    barTop,
+                    barRight,
+                    plotBottom
+                )
+
+                val barPaint = if (index % 2 == 0) {
+                    barPurple
+                } else {
+                    barMint
+                }
+
+                canvas.drawRoundRect(
+                    rect,
+                    dp(5f),
+                    dp(5f),
+                    barPaint
+                )
             }
-            return (niceNormalized * magnitude).toInt().coerceAtLeast(1)
+
+            val label = labels.getOrNull(index).orEmpty()
+
+            canvas.drawText(
+                label,
+                centerX,
+                plotBottom + dp(16f),
+                xLabelPaint
+            )
         }
+    }
+
+    /**
+     * Produces a readable axis with roughly 3–5 labels.
+     *
+     * Examples:
+     * - max 52,027 -> interval 20,000 -> maxY 60,000
+     * - max 8,420  -> interval 2,000  -> maxY 10,000
+     * - max 900    -> interval 250    -> maxY 1,000
+     */
+    private fun calculateAxis(maxValue: Int): AxisScale {
+        if (maxValue <= 0) {
+            return AxisScale(
+                maxY = DEFAULT_MAX_Y,
+                interval = DEFAULT_INTERVAL
+            )
+        }
+
+        val targetIntervals = 4
+        val roughInterval = maxValue.toDouble() / targetIntervals.toDouble()
+        val interval = niceCeiling(roughInterval).toInt().coerceAtLeast(1)
+
+        val maxY = (
+                ceil(maxValue.toDouble() / interval.toDouble()).toInt() * interval
+                ).coerceAtLeast(interval)
+
+        return AxisScale(
+            maxY = maxY,
+            interval = interval
+        )
+    }
+
+    /**
+     * Rounds upward to a chart-friendly interval:
+     * 1, 2, 2.5, 5, or 10 × a power of ten.
+     */
+    private fun niceCeiling(value: Double): Double {
+        if (value <= 0.0) return 1.0
+
+        val exponent = floor(log10(value))
+        val power = 10.0.pow(exponent)
+        val fraction = value / power
+
+        val niceFraction = when {
+            fraction <= 1.0 -> 1.0
+            fraction <= 2.0 -> 2.0
+            fraction <= 2.5 -> 2.5
+            fraction <= 5.0 -> 5.0
+            else -> 10.0
+        }
+
+        return niceFraction * power
+    }
+
+    private fun formatAxisValue(value: Int): String {
+        return when {
+            value >= 1_000_000 -> {
+                String.format(Locale.US, "%.1fM", value / 1_000_000f)
+                    .replace(".0M", "M")
+            }
+
+            value >= 1_000 -> {
+                String.format(Locale.US, "%.0fk", value / 1_000f)
+            }
+
+            else -> value.toString()
+        }
+    }
+
+    private data class AxisScale(
+        val maxY: Int,
+        val interval: Int
+    )
+
+    companion object {
+        private const val DEFAULT_MAX_Y = 200
+        private const val DEFAULT_INTERVAL = 50
     }
 }

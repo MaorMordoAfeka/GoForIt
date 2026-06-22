@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Elegant trophy icon for leaderboard -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#7C39A0">
+
+    <!-- Trophy cup -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M8,4 H16 V8
+            C16,11.1 14.15,13.6 12,14.2
+            C9.85,13.6 8,11.1 8,8 Z" />
+
+    <!-- Left handle -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M8,6.2
+            H6.6
+            C5.2,6.2 4.2,7.2 4.2,8.5
+            C4.2,9.8 5.2,10.8 6.6,10.8
+            H7.8" />
+
+    <!-- Right handle -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M16,6.2
+            H17.4
+            C18.8,6.2 19.8,7.2 19.8,8.5
+            C19.8,9.8 18.8,10.8 17.4,10.8
+            H16.2" />
+
+    <!-- Stem -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M11,14.2 H13 V17.3 H11 Z" />
+
+    <!-- Upper base -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M9,17.3 H15 V18.9 H9 Z" />
+
+    <!-- Bottom base -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M7.5,18.9
+            H16.5
+            C17.05,18.9 17.5,19.35 17.5,19.9
+            C17.5,20.45 17.05,20.9 16.5,20.9
+            H7.5
+            C6.95,20.9 6.5,20.45 6.5,19.9
+            C6.5,19.35 6.95,18.9 7.5,18.9 Z" />
+
+    <!-- Small star -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M12,6.35
+            L12.35,7.05
+            L13.15,7.17
+            L12.57,7.73
+            L12.71,8.53
+            L12,8.16
+            L11.29,8.53
+            L11.43,7.73
+            L10.85,7.17
+            L11.65,7.05 Z" />
+</vector>

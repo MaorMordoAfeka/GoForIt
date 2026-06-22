@@ -6,10 +6,10 @@ import android.graphics.Color
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
-import android.widget.ImageButton
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -17,6 +17,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.feature.leaderboard.model.LeaderboardEntry
+import com.example.goforitGit.navigation.DrawerNavigator
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
@@ -34,6 +36,22 @@ class LeaderboardActivity : AppCompatActivity() {
         private const val EXTRA_DAY_KEY = "extra_day_key"
         private const val PAGE_SIZE = 20
 
+        /** Cap on entries scanned when filtering by faculty (grouped client-side). */
+        private const val MAX_FILTER_SCAN = 2000
+
+        /** Fixed set of faculties offered in the filter chooser. */
+        private val FACULTY_OPTIONS = listOf(
+            "Electrical Engineering",
+            "Mechanical Engineering",
+            "Software Engineering",
+            "Information Systems Engineering",
+            "Medical Engineering",
+            "Computer Science",
+            "Data Science",
+            "Interdisciplinary Programs",
+            "Other"
+        )
+
         fun createIntent(
             context: Context,
             dayKey: String? = null
@@ -48,8 +66,6 @@ class LeaderboardActivity : AppCompatActivity() {
 
     private lateinit var cardList: View
     private lateinit var layoutPageButtons: View
-
-    private lateinit var btnBack: ImageButton
 
     private lateinit var tvDayKey: TextView
     private lateinit var tvEmpty: TextView
@@ -68,6 +84,8 @@ class LeaderboardActivity : AppCompatActivity() {
     private lateinit var btnPrevPage: Button
     private lateinit var btnNextPage: Button
 
+    private lateinit var btnFaculty: MaterialButton
+
     private lateinit var cardPodium: View
     private lateinit var cardPodiumFirst: MaterialCardView
     private lateinit var cardPodiumSecond: MaterialCardView
@@ -85,6 +103,9 @@ class LeaderboardActivity : AppCompatActivity() {
     private var currentPageIndex = 0
     private var hasNextPage = false
     private var sortDescending = false
+
+    /** null = "All faculties" (normal paged ranking); otherwise filter players to this faculty. */
+    private var selectedFaculty: String? = null
 
     private var currentPageEntriesAsc: List<LeaderboardEntry> = emptyList()
 
@@ -115,7 +136,6 @@ class LeaderboardActivity : AppCompatActivity() {
     }
 
     private fun bindViews() {
-        btnBack = findViewById(R.id.btnBack)
 
         tvDayKey = findViewById(R.id.tvDayKey)
         tvEmpty = findViewById(R.id.tvEmpty)
@@ -134,6 +154,8 @@ class LeaderboardActivity : AppCompatActivity() {
         btnPrevPage = findViewById(R.id.btnPrevPage)
         btnNextPage = findViewById(R.id.btnNextPage)
 
+        btnFaculty = findViewById(R.id.btnFaculty)
+
         cardPodium = findViewById(R.id.cardPodium)
         cardPodiumFirst = findViewById(R.id.cardPodiumFirst)
         cardPodiumSecond = findViewById(R.id.cardPodiumSecond)
@@ -150,7 +172,12 @@ class LeaderboardActivity : AppCompatActivity() {
     }
 
     private fun setupButtons() {
-        btnBack.setOnClickListener { finish() }
+        findViewById<com.google.android.material.appbar.MaterialToolbar>(R.id.toolbar)
+            .setNavigationOnClickListener {
+                DrawerNavigator.open(this)
+            }
+
+        btnFaculty.setOnClickListener { showFacultyChooser() }
 
         btnPrevDay.setOnClickListener { changeDayBy(-1) }
         btnToday.setOnClickListener { goToToday() }
@@ -168,7 +195,7 @@ class LeaderboardActivity : AppCompatActivity() {
 
         btnSort.setOnClickListener {
             sortDescending = !sortDescending
-            renderCurrentPage(scrollToTop = true)
+            renderActivePlayers(scrollToTop = true)
             updateControls()
         }
 
@@ -207,7 +234,7 @@ class LeaderboardActivity : AppCompatActivity() {
         pendingScrollUid = null
         pendingScrollRank = null
         profileLoadGeneration++
-        loadPageByIndex(0, showTopLoader = true)
+        reloadCurrentDay(showTopLoader = true)
     }
 
     private fun goToToday() {
@@ -219,12 +246,168 @@ class LeaderboardActivity : AppCompatActivity() {
         pendingScrollUid = null
         pendingScrollRank = null
         profileLoadGeneration++
-        loadPageByIndex(0, showTopLoader = true)
+        reloadCurrentDay(showTopLoader = true)
     }
 
     private fun refreshCurrentPage() {
         profileLoadGeneration++
-        loadPageByIndex(currentPageIndex, showTopLoader = true)
+        val faculty = selectedFaculty
+        if (faculty != null) {
+            loadFilteredPlayers(faculty, showTopLoader = true)
+        } else {
+            loadPageByIndex(currentPageIndex, showTopLoader = true)
+        }
+    }
+
+    /** Reloads the current day's data, honoring any active faculty filter. */
+    private fun reloadCurrentDay(showTopLoader: Boolean) {
+        reloadPlayers(showTopLoader = showTopLoader)
+    }
+
+    /** Loads the player list for the current day, honoring any active faculty filter. */
+    private fun reloadPlayers(showTopLoader: Boolean) {
+        val faculty = selectedFaculty
+        if (faculty == null) {
+            loadPageByIndex(0, showTopLoader = showTopLoader)
+        } else {
+            loadFilteredPlayers(faculty, showTopLoader = showTopLoader)
+        }
+    }
+
+    private fun normalizeFaculty(raw: String): String {
+        return raw.trim().ifBlank { "General" }
+    }
+
+    private fun updateFacultyButtonLabel() {
+        btnFaculty.text = "Faculty: " + (selectedFaculty ?: "All")
+    }
+
+    private fun showFacultyChooser() {
+        if (isLoading) return
+
+        val options = mutableListOf("All faculties")
+        options.addAll(FACULTY_OPTIONS)
+
+        val current = selectedFaculty
+        val checked = if (current == null) 0 else options.indexOf(current).coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle("Filter by faculty")
+            .setSingleChoiceItems(options.toTypedArray(), checked) { dialog, which ->
+                applyFacultyFilter(if (which == 0) null else options[which])
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Selecting a faculty from the chooser filters the player list. */
+    private fun applyFacultyFilter(faculty: String?) {
+        if (isLoading) return
+
+        val normalized = faculty?.let { normalizeFaculty(it) }
+        if (selectedFaculty == normalized) return
+
+        selectedFaculty = normalized
+        profileLoadGeneration++
+        pendingScrollUid = null
+        pendingScrollRank = null
+
+        updateFacultyButtonLabel()
+        reloadPlayers(showTopLoader = true)
+        updateControls()
+    }
+
+    private fun loadFilteredPlayers(faculty: String, showTopLoader: Boolean) {
+        if (isLoading) return
+
+        isLoading = true
+        progressTop.visibility = if (showTopLoader) View.VISIBLE else View.GONE
+        progressBottom.visibility = View.GONE
+        updateControls()
+
+        val requestedDayKey = dayKey
+        val requestedFaculty = faculty
+
+        // A single equality filter would miss faculties stored with surrounding
+        // whitespace, so we read the day's ranked entries and group client-side by
+        // normalized faculty name.
+        leaderboardQuery()
+            .limit(MAX_FILTER_SCAN.toLong())
+            .get()
+            .addOnSuccessListener { snapshot ->
+                if (dayKey != requestedDayKey ||
+                    selectedFaculty != requestedFaculty
+                ) return@addOnSuccessListener
+
+                val all = snapshot.documents.mapNotNull { it.toLeaderboardEntryOrNull() }
+
+                currentPageEntriesAsc =
+                    all.filter { normalizeFaculty(it.faculty) == requestedFaculty }
+                currentPageIndex = 0
+                hasNextPage = false
+
+                renderFilteredPlayers(scrollToTop = true)
+                enrichCurrentPageWithPublicProfiles(
+                    entriesSnapshot = currentPageEntriesAsc,
+                    expectedDayKey = requestedDayKey,
+                    expectedPageIndex = 0
+                )
+            }
+            .addOnFailureListener { e ->
+                Toast.makeText(
+                    this,
+                    "Failed to filter players: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            .addOnCompleteListener {
+                isLoading = false
+                progressTop.visibility = View.GONE
+                progressBottom.visibility = View.GONE
+                updateControls()
+            }
+    }
+
+    private fun renderFilteredPlayers(scrollToTop: Boolean) {
+        cardPodium.visibility = View.GONE
+        layoutPageButtons.visibility = View.GONE
+
+        val items = if (sortDescending) {
+            currentPageEntriesAsc.sortedByDescending { it.rank }
+        } else {
+            currentPageEntriesAsc.sortedBy { it.rank }
+        }
+
+        adapter.replaceAll(items)
+
+        val hasItems = items.isNotEmpty()
+        if (hasItems) {
+            cardList.visibility = View.VISIBLE
+            if (scrollToTop) recyclerView.scrollToPosition(0)
+        } else {
+            cardList.visibility = View.GONE
+        }
+
+        tvEmpty.visibility = if (hasItems) View.GONE else View.VISIBLE
+        if (!hasItems) {
+            tvEmpty.text = "No ranked players in ${selectedFaculty ?: "this faculty"} for $dayKey."
+        }
+
+        tvDayKey.text = "Day: $dayKey"
+        val count = items.size
+        tvPageInfo.text = "\nFaculty filter: ${selectedFaculty}\n\n$count " +
+                (if (count == 1) "competitor" else "competitors")
+        btnSort.text = if (sortDescending) "Sort ↑" else "Sort ↓"
+    }
+
+    /** Renders the player list using the active filter (or normal paging). */
+    private fun renderActivePlayers(scrollToTop: Boolean) {
+        if (selectedFaculty == null) {
+            renderCurrentPage(scrollToTop)
+        } else {
+            renderFilteredPlayers(scrollToTop)
+        }
     }
 
     private fun leaderboardQuery(): Query {
@@ -256,6 +439,10 @@ class LeaderboardActivity : AppCompatActivity() {
         query.limit(PAGE_SIZE.toLong() + 1L)
             .get()
             .addOnSuccessListener { snapshot ->
+                if (dayKey != requestedDayKey ||
+                    selectedFaculty != null
+                ) return@addOnSuccessListener
+
                 val docsWithPeek = snapshot.documents
                 hasNextPage = docsWithPeek.size > PAGE_SIZE
 
@@ -328,7 +515,7 @@ class LeaderboardActivity : AppCompatActivity() {
                 }
             }
 
-            renderCurrentPage(scrollToTop = false)
+            renderActivePlayers(scrollToTop = false)
             updateControls()
         }
     }
@@ -511,7 +698,21 @@ class LeaderboardActivity : AppCompatActivity() {
         btnPrevPage.isEnabled = !isLoading && currentPageIndex > 0
         btnNextPage.isEnabled = !isLoading && hasNextPage
 
-        btnSort.visibility = if (recyclerEntriesForCurrentPage().isNotEmpty()) View.VISIBLE else View.GONE
+        val filtered = selectedFaculty != null
+
+        btnFaculty.isEnabled = !isLoading
+        updateFacultyButtonLabel()
+
+        // "My rank", "First page" and paging assume the full global, paged ranking.
+        btnMyRank.visibility = if (filtered) View.GONE else View.VISIBLE
+        btnFirstPage.visibility = if (filtered) View.GONE else View.VISIBLE
+
+        val hasSortableItems = if (filtered) {
+            currentPageEntriesAsc.isNotEmpty()
+        } else {
+            recyclerEntriesForCurrentPage().isNotEmpty()
+        }
+        btnSort.visibility = if (hasSortableItems) View.VISIBLE else View.GONE
     }
 
     private fun showMyRank() {

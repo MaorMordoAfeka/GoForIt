@@ -1,5 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+
+    <!-- ============================================================= -->
+    <!--  GoForIt brand palette                                        -->
+    <!--  Use semantically. Most screens = offwhite bg + white cards   -->
+    <!--  + restrained purple/mint accents. Do NOT flood with purple.  -->
+    <!-- ============================================================= -->
+
+    <!-- Structure / brand purple -->
+    <color name="brand_purple_deep">#452066</color>   <!-- headings, nav emphasis, selected -->
+    <color name="brand_purple">#563078</color>        <!-- primary structural purple -->
+    <color name="brand_purple_pressed">#3E2059</color>
+    <color name="text_purple_dark">#2D1845</color>    <!-- primary text / accessible headings -->
+
+    <!-- Mint activity / success / progress / primary CTA -->
+    <color name="brand_mint">#66D4AA</color>
+    <color name="brand_mint_strong">#3FBF8E</color>   <!-- text/icon on white when AA contrast needed -->
+    <color name="brand_mint_pressed">#54C79B</color>
+    <color name="soft_mint">#DDF5EA</color>          <!-- positive surfaces, progress tracks -->
+
+    <!-- Neutral / surfaces -->
+    <color name="soft_lavender">#EEE8F4</color>      <!-- secondary chips, form fields, inactive -->
+    <color name="bg_offwhite">#F7F9F3</color>        <!-- main app background -->
+    <color name="surface_white">#FFFFFF</color>
+    <color name="text_muted">#6D637F</color>        <!-- secondary text -->
+    <color name="divider">#E7E1EC</color>          <!-- borders / dividers -->
+
+    <!-- Status semantics -->
+    <color name="status_ok">#3FBF8E</color>
+    <color name="status_warn">#C9851E</color>
+    <color name="status_error">#C0392B</color>
+    <color name="status_idle">#6D637F</color>
+
+    <!-- Podium accents (leaderboard placement ONLY) -->
+    <color name="podium_gold">#E3B33A</color>
+    <color name="podium_silver">#A7AEC0</color>
+    <color name="podium_bronze">#C58A5B</color>
+
+    <!-- On-color text -->
+    <color name="on_purple">#FFFFFF</color>
+    <color name="on_mint">#13351F</color>           <!-- dark text on mint = AA -->
+
+    <!-- ============================================================= -->
+    <!--  Back-compat aliases (keep so existing layouts still build)   -->
+    <!-- ============================================================= -->
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
     <color name="purple_700">#FF3700B3</color>
@@ -7,4 +51,5 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
 </resources>

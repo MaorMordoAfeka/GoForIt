@@ -1,8 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Default screen margins, per the Android Design guidelines. -->
+
+    <!-- Spacing scale (4dp base) -->
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_sm">8dp</dimen>
+    <dimen name="space_md">12dp</dimen>
+    <dimen name="space_lg">16dp</dimen>
+    <dimen name="space_xl">20dp</dimen>
+    <dimen name="space_2xl">24dp</dimen>
+    <dimen name="space_3xl">32dp</dimen>
+
+    <!-- Screen gutters -->
+    <dimen name="screen_gutter">20dp</dimen>
+
+    <!-- Corner radii -->
+    <dimen name="radius_card">22dp</dimen>
+    <dimen name="radius_tile">18dp</dimen>
+    <dimen name="radius_chip">100dp</dimen>
+    <dimen name="radius_button">16dp</dimen>
+    <dimen name="radius_input">14dp</dimen>
+
+    <!-- Elevation (kept very light per brand) -->
+    <dimen name="elevation_card">0dp</dimen>
+
+    <!-- Touch targets -->
+    <dimen name="touch_min">48dp</dimen>
+    <dimen name="button_height">56dp</dimen>
+    <dimen name="button_height_secondary">52dp</dimen>
+
+    <!-- Legacy template dimens required by nav_header.xml (keep!) -->
+    <dimen name="nav_header_height">176dp</dimen>
+    <dimen name="nav_header_vertical_spacing">8dp</dimen>
     <dimen name="activity_horizontal_margin">16dp</dimen>
     <dimen name="activity_vertical_margin">16dp</dimen>
-    <dimen name="nav_header_vertical_spacing">8dp</dimen>
-    <dimen name="nav_header_height">176dp</dimen>
-    <dimen name="fab_margin">16dp</dimen>
+
+    <!-- Type sizes -->
+    <dimen name="text_display">34sp</dimen>
+    <dimen name="text_h1">26sp</dimen>
+    <dimen name="text_h2">20sp</dimen>
+    <dimen name="text_title">18sp</dimen>
+    <dimen name="text_body">14sp</dimen>
+    <dimen name="text_caption">12sp</dimen>
+
 </resources>

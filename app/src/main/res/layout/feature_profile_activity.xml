@@ -4,7 +4,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg_home_gradient"
+    android:background="@drawable/bg_app_surface"
     android:layoutDirection="ltr">
 
     <!-- =============================================================== -->
@@ -19,12 +19,12 @@
         android:minHeight="?attr/actionBarSize"
         app:layout_constraintTop_toTopOf="parent"
         app:menu="@menu/menu_profile"
-        app:navigationContentDescription="Back"
-        app:navigationIcon="@android:drawable/ic_menu_revert"
-        app:navigationIconTint="#1F2A44"
+        app:navigationContentDescription="Open navigation menu"
+        app:navigationIcon="@drawable/ic_menu_hamburger"
+        app:navigationIconTint="@color/text_purple_dark"
         app:title="Profile"
         app:titleCentered="false"
-        app:titleTextColor="#1F2A44" />
+        app:titleTextColor="@color/text_purple_dark" />
 
     <!-- =============================================================== -->
     <!-- SCROLLING CONTENT                                                -->
@@ -78,7 +78,7 @@
                             android:clickable="true"
                             android:focusable="true"
                             android:foreground="?attr/selectableItemBackgroundBorderless"
-                            app:cardBackgroundColor="#F4F1FB"
+                            app:cardBackgroundColor="@color/soft_lavender"
                             app:cardCornerRadius="32dp"
                             app:cardElevation="0dp">
 
@@ -103,7 +103,7 @@
                             android:contentDescription="Change photo"
                             android:focusable="true"
                             android:foreground="?attr/selectableItemBackgroundBorderless"
-                            app:cardBackgroundColor="#1F2A44"
+                            app:cardBackgroundColor="@color/text_purple_dark"
                             app:cardCornerRadius="13dp"
                             app:cardElevation="0dp"
                             app:strokeColor="#FFFFFF"
@@ -133,7 +133,7 @@
                             android:ellipsize="end"
                             android:maxLines="1"
                             android:text="—"
-                            android:textColor="#1F2A44"
+                            android:textColor="@color/text_purple_dark"
                             android:textSize="18sp"
                             android:textStyle="bold" />
 
@@ -145,7 +145,7 @@
                             android:ellipsize="end"
                             android:maxLines="1"
                             android:text="—"
-                            android:textColor="#7B8197"
+                            android:textColor="@color/text_muted"
                             android:textSize="13sp" />
                     </LinearLayout>
                 </LinearLayout>
@@ -187,7 +187,7 @@
                             android:layout_height="22dp"
                             android:contentDescription="@null"
                             android:src="@android:drawable/btn_star_big_off"
-                            app:tint="#7C39A0" />
+                            app:tint="@color/brand_purple" />
 
                         <TextView
                             android:id="@+id/tvStatsTotalPoints"
@@ -195,8 +195,8 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
                             android:text="0"
-                            android:textColor="#1F2A44"
-                            android:textSize="22sp"
+                            android:textColor="@color/text_purple_dark"
+                            android:textSize="18sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -204,7 +204,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
                             android:text="Total Points"
-                            android:textColor="#5C5F7A"
+                            android:textColor="@color/text_muted"
                             android:textSize="12sp" />
                     </LinearLayout>
 
@@ -212,7 +212,7 @@
                         android:layout_width="1dp"
                         android:layout_height="64dp"
                         android:layout_gravity="center_vertical"
-                        android:background="#E6E2EE" />
+                        android:background="@color/divider" />
 
                     <!-- Badges -->
                     <LinearLayout
@@ -229,7 +229,7 @@
                             android:layout_height="22dp"
                             android:contentDescription="@null"
                             android:src="@android:drawable/ic_menu_myplaces"
-                            app:tint="#3FA84B" />
+                            app:tint="@color/brand_mint_strong" />
 
                         <TextView
                             android:id="@+id/tvStatsBadges"
@@ -237,8 +237,8 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
                             android:text="0"
-                            android:textColor="#1F2A44"
-                            android:textSize="22sp"
+                            android:textColor="@color/text_purple_dark"
+                            android:textSize="18sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -246,7 +246,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
                             android:text="Badges"
-                            android:textColor="#5C5F7A"
+                            android:textColor="@color/text_muted"
                             android:textSize="12sp" />
                     </LinearLayout>
 
@@ -254,7 +254,7 @@
                         android:layout_width="1dp"
                         android:layout_height="64dp"
                         android:layout_gravity="center_vertical"
-                        android:background="#E6E2EE" />
+                        android:background="@color/divider" />
 
                     <!-- Best Rank -->
                     <LinearLayout
@@ -271,7 +271,7 @@
                             android:layout_height="22dp"
                             android:contentDescription="@null"
                             android:src="@android:drawable/ic_menu_sort_by_size"
-                            app:tint="#7C39A0" />
+                            app:tint="@color/brand_purple" />
 
                         <TextView
                             android:id="@+id/tvStatsBestRank"
@@ -279,8 +279,8 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
                             android:text="—"
-                            android:textColor="#1F2A44"
-                            android:textSize="22sp"
+                            android:textColor="@color/text_purple_dark"
+                            android:textSize="18sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -288,7 +288,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
                             android:text="Best Rank"
-                            android:textColor="#5C5F7A"
+                            android:textColor="@color/text_muted"
                             android:textSize="12sp" />
                     </LinearLayout>
 
@@ -296,7 +296,7 @@
                         android:layout_width="1dp"
                         android:layout_height="64dp"
                         android:layout_gravity="center_vertical"
-                        android:background="#E6E2EE" />
+                        android:background="@color/divider" />
 
                     <!-- Days Active -->
                     <LinearLayout
@@ -313,7 +313,7 @@
                             android:layout_height="22dp"
                             android:contentDescription="@null"
                             android:src="@android:drawable/ic_menu_my_calendar"
-                            app:tint="#7C39A0" />
+                            app:tint="@color/brand_purple" />
 
                         <TextView
                             android:id="@+id/tvStatsDaysActive"
@@ -321,8 +321,8 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
                             android:text="0"
-                            android:textColor="#1F2A44"
-                            android:textSize="22sp"
+                            android:textColor="@color/text_purple_dark"
+                            android:textSize="18sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -330,7 +330,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
                             android:text="Days Active"
-                            android:textColor="#5C5F7A"
+                            android:textColor="@color/text_muted"
                             android:textSize="12sp" />
                     </LinearLayout>
                 </LinearLayout>
@@ -346,7 +346,7 @@
                 android:layout_marginTop="22dp"
                 android:letterSpacing="0.08"
                 android:text="PERSONAL INFO"
-                android:textColor="#FFFFFF"
+                android:textColor="@color/brand_purple_deep"
                 android:textSize="12sp"
                 android:textStyle="bold" />
 
@@ -378,7 +378,7 @@
                         app:helperText="Username must be 3–24 characters.&#10;Use letters, numbers, spaces, . _ - or '.&#10;Must start and end with a letter or number."
                         app:helperTextEnabled="true"
                         app:startIconDrawable="@drawable/ic_person"
-                        app:startIconTint="#7C39A0">
+                        app:startIconTint="@color/brand_purple">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/etUsername"
@@ -387,7 +387,7 @@
                             android:inputType="text"
                             android:maxLength="24"
                             android:maxLines="1"
-                            android:textColor="#1F2A44" />
+                            android:textColor="@color/text_purple_dark" />
                     </com.google.android.material.textfield.TextInputLayout>
 
                     <!-- Email -->
@@ -405,7 +405,7 @@
                         app:helperText="Changing this asks you to sign in again"
                         app:helperTextEnabled="true"
                         app:startIconDrawable="@android:drawable/ic_dialog_email"
-                        app:startIconTint="#7C39A0">
+                        app:startIconTint="@color/brand_purple">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/etEmailEdit"
@@ -413,7 +413,7 @@
                             android:layout_height="wrap_content"
                             android:inputType="textEmailAddress"
                             android:maxLines="1"
-                            android:textColor="#1F2A44" />
+                            android:textColor="@color/text_purple_dark" />
                     </com.google.android.material.textfield.TextInputLayout>
 
                     <!-- Faculty (exposed dropdown) -->
@@ -431,7 +431,7 @@
                         app:helperText="Choose your Afeka B.Sc. department or closest match"
                         app:helperTextEnabled="true"
                         app:startIconDrawable="@android:drawable/ic_menu_agenda"
-                        app:startIconTint="#7C39A0">
+                        app:startIconTint="@color/brand_purple">
 
                         <com.google.android.material.textfield.MaterialAutoCompleteTextView
                             android:id="@+id/etFaculty"
@@ -439,7 +439,7 @@
                             android:layout_height="wrap_content"
                             android:inputType="none"
                             android:maxLines="1"
-                            android:textColor="#1F2A44"
+                            android:textColor="@color/text_purple_dark"
                             tools:ignore="LabelFor" />
                     </com.google.android.material.textfield.TextInputLayout>
                 </LinearLayout>
@@ -455,7 +455,7 @@
                 android:layout_marginTop="22dp"
                 android:letterSpacing="0.08"
                 android:text="REMINDERS"
-                android:textColor="#FFFFFF"
+                android:textColor="@color/brand_purple_deep"
                 android:textSize="12sp"
                 android:textStyle="bold" />
 
@@ -490,7 +490,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="Low-activity nudges"
-                                android:textColor="#1F2A44"
+                                android:textColor="@color/text_purple_dark"
                                 android:textSize="15sp"
                                 android:textStyle="bold" />
 
@@ -499,7 +499,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="2dp"
                                 android:text="Send me a reminder during my slowest 4-hour window."
-                                android:textColor="#7B8197"
+                                android:textColor="@color/text_muted"
                                 android:textSize="12sp" />
                         </LinearLayout>
 
@@ -514,7 +514,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
                         android:layout_marginTop="18dp"
-                        android:background="#E6E2EE" />
+                        android:background="@color/divider" />
 
                     <!-- Quiet hours: heading + helper -->
                     <TextView
@@ -522,7 +522,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="18dp"
                         android:text="Quiet hours"
-                        android:textColor="#1F2A44"
+                        android:textColor="@color/text_purple_dark"
                         android:textSize="15sp"
                         android:textStyle="bold" />
 
@@ -531,7 +531,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
                         android:text="You won't be notified between these hours."
-                        android:textColor="#7B8197"
+                        android:textColor="@color/text_muted"
                         android:textSize="12sp" />
 
                     <!-- Two clickable time cards -->
@@ -549,10 +549,10 @@
                             android:clickable="true"
                             android:focusable="true"
                             android:foreground="?attr/selectableItemBackground"
-                            app:cardBackgroundColor="#F7F4FC"
+                            app:cardBackgroundColor="@color/soft_lavender"
                             app:cardCornerRadius="16dp"
                             app:cardElevation="0dp"
-                            app:strokeColor="#E6E2EE"
+                            app:strokeColor="@color/divider"
                             app:strokeWidth="1dp">
 
                             <LinearLayout
@@ -572,14 +572,14 @@
                                         android:layout_height="16dp"
                                         android:contentDescription="@null"
                                         android:src="@android:drawable/ic_menu_recent_history"
-                                        app:tint="#7C39A0" />
+                                        app:tint="@color/brand_purple" />
 
                                     <TextView
                                         android:layout_width="wrap_content"
                                         android:layout_height="wrap_content"
                                         android:layout_marginStart="6dp"
                                         android:text="Bedtime"
-                                        android:textColor="#5C5F7A"
+                                        android:textColor="@color/text_muted"
                                         android:textSize="12sp"
                                         android:textStyle="bold" />
                                 </LinearLayout>
@@ -590,7 +590,7 @@
                                     android:layout_height="wrap_content"
                                     android:layout_marginTop="4dp"
                                     android:text="22:00"
-                                    android:textColor="#1F2A44"
+                                    android:textColor="@color/text_purple_dark"
                                     android:textSize="22sp"
                                     android:textStyle="bold" />
                             </LinearLayout>
@@ -608,10 +608,10 @@
                             android:clickable="true"
                             android:focusable="true"
                             android:foreground="?attr/selectableItemBackground"
-                            app:cardBackgroundColor="#F7F4FC"
+                            app:cardBackgroundColor="@color/soft_lavender"
                             app:cardCornerRadius="16dp"
                             app:cardElevation="0dp"
-                            app:strokeColor="#E6E2EE"
+                            app:strokeColor="@color/divider"
                             app:strokeWidth="1dp">
 
                             <LinearLayout
@@ -631,14 +631,14 @@
                                         android:layout_height="16dp"
                                         android:contentDescription="@null"
                                         android:src="@android:drawable/ic_menu_today"
-                                        app:tint="#7C39A0" />
+                                        app:tint="@color/brand_purple" />
 
                                     <TextView
                                         android:layout_width="wrap_content"
                                         android:layout_height="wrap_content"
                                         android:layout_marginStart="6dp"
                                         android:text="Wake-up"
-                                        android:textColor="#5C5F7A"
+                                        android:textColor="@color/text_muted"
                                         android:textSize="12sp"
                                         android:textStyle="bold" />
                                 </LinearLayout>
@@ -649,7 +649,7 @@
                                     android:layout_height="wrap_content"
                                     android:layout_marginTop="4dp"
                                     android:text="08:00"
-                                    android:textColor="#1F2A44"
+                                    android:textColor="@color/text_purple_dark"
                                     android:textSize="22sp"
                                     android:textStyle="bold" />
                             </LinearLayout>
@@ -670,7 +670,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="10dp"
                         android:layout_marginTop="18dp"
-                        android:background="#F1EFE8"
+                        android:background="@color/soft_lavender"
                         android:orientation="horizontal">
 
                         <View
@@ -678,21 +678,21 @@
                             android:layout_width="0dp"
                             android:layout_height="match_parent"
                             android:layout_weight="0"
-                            android:background="#7C39A0" />
+                            android:background="@color/brand_purple" />
 
                         <View
                             android:id="@+id/timelineSegMid"
                             android:layout_width="0dp"
                             android:layout_height="match_parent"
                             android:layout_weight="1"
-                            android:background="#E6E2EE" />
+                            android:background="@color/divider" />
 
                         <View
                             android:id="@+id/timelineSegRight"
                             android:layout_width="0dp"
                             android:layout_height="match_parent"
                             android:layout_weight="0"
-                            android:background="#7C39A0" />
+                            android:background="@color/brand_purple" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -707,7 +707,7 @@
                             android:layout_weight="1"
                             android:gravity="start"
                             android:text="00"
-                            android:textColor="#B0B5C5"
+                            android:textColor="@color/text_muted"
                             android:textSize="10sp" />
 
                         <TextView
@@ -716,7 +716,7 @@
                             android:layout_weight="1"
                             android:gravity="center"
                             android:text="06"
-                            android:textColor="#B0B5C5"
+                            android:textColor="@color/text_muted"
                             android:textSize="10sp" />
 
                         <TextView
@@ -725,7 +725,7 @@
                             android:layout_weight="1"
                             android:gravity="center"
                             android:text="12"
-                            android:textColor="#B0B5C5"
+                            android:textColor="@color/text_muted"
                             android:textSize="10sp" />
 
                         <TextView
@@ -734,7 +734,7 @@
                             android:layout_weight="1"
                             android:gravity="center"
                             android:text="18"
-                            android:textColor="#B0B5C5"
+                            android:textColor="@color/text_muted"
                             android:textSize="10sp" />
 
                         <TextView
@@ -743,7 +743,7 @@
                             android:layout_weight="1"
                             android:gravity="end"
                             android:text="24"
-                            android:textColor="#B0B5C5"
+                            android:textColor="@color/text_muted"
                             android:textSize="10sp" />
                     </LinearLayout>
 
@@ -753,7 +753,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         android:text="Notifications muted from 22:00 to 08:00."
-                        android:textColor="#5C5F7A"
+                        android:textColor="@color/text_muted"
                         android:textSize="13sp" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
@@ -768,7 +768,7 @@
                 android:layout_marginTop="22dp"
                 android:letterSpacing="0.08"
                 android:text="ACCOUNT"
-                android:textColor="#FFFFFF"
+                android:textColor="@color/brand_purple_deep"
                 android:textSize="12sp"
                 android:textStyle="bold" />
 
@@ -800,7 +800,7 @@
                         app:helperText="Used to schedule your reminders"
                         app:helperTextEnabled="true"
                         app:startIconDrawable="@android:drawable/ic_menu_mylocation"
-                        app:startIconTint="#7C39A0">
+                        app:startIconTint="@color/brand_purple">
 
                         <com.google.android.material.textfield.MaterialAutoCompleteTextView
                             android:id="@+id/etTimezone"
@@ -809,7 +809,7 @@
                             android:completionThreshold="1"
                             android:inputType="text"
                             android:maxLines="1"
-                            android:textColor="#1F2A44"
+                            android:textColor="@color/text_purple_dark"
                             tools:ignore="LabelFor" />
                     </com.google.android.material.textfield.TextInputLayout>
 
@@ -817,7 +817,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
                         android:layout_marginTop="6dp"
-                        android:background="#E6E2EE" />
+                        android:background="@color/divider" />
 
                     <!-- Last sync row + Refresh button -->
                     <LinearLayout
@@ -832,7 +832,7 @@
                             android:layout_height="16dp"
                             android:contentDescription="@null"
                             android:src="@android:drawable/ic_menu_recent_history"
-                            app:tint="#3FA84B" />
+                            app:tint="@color/brand_mint_strong" />
 
                         <TextView
                             android:id="@+id/tvLastSync"
@@ -841,7 +841,7 @@
                             android:layout_marginStart="6dp"
                             android:layout_weight="1"
                             android:text="Not synced yet"
-                            android:textColor="#5C5F7A"
+                            android:textColor="@color/text_muted"
                             android:textSize="13sp" />
 
                         <com.google.android.material.button.MaterialButton
@@ -854,11 +854,11 @@
                             android:paddingEnd="14dp"
                             android:text="Refresh"
                             android:textAllCaps="false"
-                            android:textColor="#7C39A0"
+                            android:textColor="@color/brand_purple"
                             android:textStyle="bold"
                             app:icon="@android:drawable/ic_popup_sync"
                             app:iconSize="16dp"
-                            app:iconTint="#7C39A0" />
+                            app:iconTint="@color/brand_purple" />
                     </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
@@ -873,7 +873,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:visibility="gone"
-        app:cardBackgroundColor="#1F2A44"
+        app:cardBackgroundColor="@color/text_purple_dark"
         app:cardCornerRadius="0dp"
         app:cardElevation="6dp"
         app:layout_constraintBottom_toBottomOf="parent"
@@ -922,12 +922,12 @@
                 style="@style/Widget.MaterialComponents.Button"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
-                android:backgroundTint="#3FA84B"
+                android:backgroundTint="@color/brand_mint"
                 android:paddingStart="18dp"
                 android:paddingEnd="18dp"
                 android:text="Save"
                 android:textAllCaps="false"
-                android:textColor="#FFFFFF"
+                android:textColor="@color/on_mint"
                 android:textStyle="bold"
                 app:cornerRadius="20dp" />
         </LinearLayout>
@@ -940,7 +940,7 @@
         android:id="@+id/progress"
         android:layout_width="48dp"
         android:layout_height="48dp"
-        android:indeterminateTint="#7C39A0"
+        android:indeterminateTint="@color/brand_purple"
         android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"

@@ -21,6 +21,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.goforitGit.R
+import com.example.goforitGit.navigation.DrawerNavigator
 import com.example.goforitGit.feature.map.data.GeocoderApi
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -28,6 +29,7 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.slider.Slider
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
@@ -203,6 +205,13 @@ class MapAndRoutesActivity : AppCompatActivity() {
         MapLibre.getInstance(this)
         setContentView(R.layout.feature_map_activity)
 
+        findViewById<MaterialToolbar>(R.id.topAppBar).apply {
+            setNavigationOnClickListener {
+                DrawerNavigator.open(this@MapAndRoutesActivity)
+            }
+            bringToFront()
+        }
+
         etStart      = findViewById(R.id.etStart)
         etDest       = findViewById(R.id.etDest)
         sParks       = findViewById(R.id.sParks)
@@ -250,16 +259,20 @@ class MapAndRoutesActivity : AppCompatActivity() {
         fabMenu.bringToFront()
         fabMyLocation.bringToFront()
 
-        // Hide both FABs when the menu sheet is fully expanded upward
-        // (they would otherwise sit on top of the sheet content).
+        // Keep the full map-control stack hidden when the route sheet is expanded.
+        // This includes: Compass → Route options → My location.
         sheetBehavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
             override fun onStateChanged(bottomSheet: View, newState: Int) {
                 val hidden = newState == BottomSheetBehavior.STATE_EXPANDED
+
                 fabMyLocation.visibility = if (hidden) View.GONE else View.VISIBLE
                 fabMenu.visibility = if (hidden) View.GONE else View.VISIBLE
+                maplibreMap?.uiSettings?.setCompassEnabled(!hidden)
             }
+
             override fun onSlide(bottomSheet: View, slideOffset: Float) = Unit
         })
+
 
         tileServer = MbTilesServer(this)
         val ok = tileServer.startServerSafely()
@@ -304,13 +317,20 @@ class MapAndRoutesActivity : AppCompatActivity() {
             maplibreMap = map
             // Keep the walking figure pinned to its GPS point as the map moves.
             map.addOnCameraMoveListener { updateFigurePosition() }
-            // Drop the compass well below the status bar (top-right) and use a
-            // custom icon with built-in padding so it isn't clipped at the top.
-            map.uiSettings.compassGravity = Gravity.TOP or Gravity.END
-            map.uiSettings.setCompassMargins(0, dp(96f).toInt(), dp(16f).toInt(), 0)
+            // Keep all map controls together on the right:
+            // Compass → Route options → My location.
+            map.uiSettings.setCompassEnabled(true)
+            map.uiSettings.compassGravity = Gravity.BOTTOM or Gravity.END
+            map.uiSettings.setCompassMargins(
+                0,
+                0,
+                dp(16f).toInt(),
+                dp(338f).toInt()
+            )
             ContextCompat.getDrawable(this, R.drawable.ic_map_compass)?.let {
                 map.uiSettings.setCompassImage(it)
             }
+
             map.setStyle(Style.Builder().fromUri("asset://style_vector_localhost.json")) { style ->
                 mapStyle = style
 

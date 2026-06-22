@@ -6,12 +6,12 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.View
-import android.widget.ImageView
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.graphics.drawable.DrawerArrowDrawable
+import androidx.core.view.GravityCompat
 import androidx.core.app.ActivityCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.lifecycleScope
@@ -22,10 +22,8 @@ import androidx.navigation.ui.navigateUp
 import androidx.navigation.ui.setupActionBarWithNavController
 import androidx.navigation.ui.setupWithNavController
 import com.example.goforitGit.R
-import com.example.goforitGit.core.data.StepsData.StepBus
 import com.example.goforitGit.core.service.BleAdvertScanService
 import com.example.goforitGit.core.service.StepService
-import com.example.goforitGit.core.util.StepsUtils.StepCounterZC
 import com.example.goforitGit.core.util.FourHourBuckets.FourHourUploadScheduler
 import com.example.goforitGit.core.util.TrackingLifecycle.OnboardingPrefs
 import com.example.goforitGit.core.util.TrackingLifecycle.TrackingPermissions
@@ -175,7 +173,8 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             OnboardingPrefs.markAskedActivityRecognition(this)
             if (!granted && !hasActivityPermission()) {
-                Toast.makeText(this, "Physical Activity permission denied", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Physical Activity permission denied", Toast.LENGTH_SHORT)
+                    .show()
             }
             ensureLocationPermission()
         }
@@ -225,7 +224,10 @@ class MainActivity : AppCompatActivity() {
     private fun hasLocationPermission(): Boolean =
         ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED ||
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                ) ==
                 PackageManager.PERMISSION_GRANTED
 
     private val requestLocation =
@@ -358,7 +360,10 @@ class MainActivity : AppCompatActivity() {
                         "Tap Continue, then choose \"Allow\" on the system dialog.",
             onContinueRunAfterDismiss = {
                 requestBlePerms.launch(
-                    arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+                    arrayOf(
+                        Manifest.permission.BLUETOOTH_SCAN,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    )
                 )
             },
             onNotNowRunAfterDismiss = {
@@ -396,7 +401,8 @@ class MainActivity : AppCompatActivity() {
             shouldShowBackgroundLocationStep() -> showBackgroundLocationRationale()
             shouldShowBatteryExemptionStep() -> showBatteryExemptionRationale()
             shouldShowMiuiAutostartStep() -> showMiuiAutostartRationale()
-            else -> { /* Done. */ }
+            else -> { /* Done. */
+            }
         }
     }
 
@@ -717,18 +723,38 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Navigation setup ----
         val drawerLayout: DrawerLayout = findViewById(R.id.drawer_layout)
+
+        if (intent.getBooleanExtra(DrawerNavigator.EXTRA_OPEN_DRAWER, false)) {
+            drawerLayout.post {
+                drawerLayout.openDrawer(GravityCompat.START)
+            }
+        }
+
         val navView: NavigationView = findViewById(R.id.nav_view)
         val navHostFragment = supportFragmentManager
             .findFragmentById(R.id.nav_host_fragment) as NavHostFragment
         val navController = navHostFragment.navController
 
         appBarConfiguration = AppBarConfiguration(
-            setOf(R.id.nav_steps, R.id.nav_home, R.id.nav_gallery, R.id.nav_slideshow),
+            setOf(
+                R.id.nav_steps,
+                R.id.nav_statistics,
+                R.id.nav_map,
+                R.id.nav_leaderboard,
+                R.id.nav_profile
+            ),
             drawerLayout
         )
 
         setSupportActionBar(findViewById(R.id.toolbar))
         setupActionBarWithNavController(navController, appBarConfiguration)
+
+        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
+
+        toolbar.post {
+            (toolbar.navigationIcon as? DrawerArrowDrawable)?.color =
+                getColor(R.color.brand_purple_deep)
+        }
 
         navView.setupWithNavController(navController)
 
@@ -738,6 +764,7 @@ class MainActivity : AppCompatActivity() {
                     signOutAndGoToLogin()
                     true
                 }
+
                 else -> {
                     val handled = androidx.navigation.ui.NavigationUI
                         .onNavDestinationSelected(item, navController)
@@ -747,41 +774,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        setupToolbarModeChip(navController)
-    }
-
-    // -------------------------------------------------------------------------
-    // Toolbar motion-mode chip (home screen only)
-    // -------------------------------------------------------------------------
-
-    private fun setupToolbarModeChip(navController: androidx.navigation.NavController) {
-        val chip = findViewById<View>(R.id.toolbarModeChip)
-        val chipText = findViewById<TextView>(R.id.toolbarModeText)
-        val chipIcon = findViewById<ImageView>(R.id.toolbarModeIcon)
-
-        // Only show it on the home (Steps) screen, to the right of the title.
-        navController.addOnDestinationChangedListener { _, destination, _ ->
-            chip.visibility = if (destination.id == R.id.nav_steps) View.VISIBLE else View.GONE
-        }
-
-        // StepBus.mode is a global StateFlow, so we can observe it here without
-        // coupling to the fragment.
-        lifecycleScope.launch {
-            StepBus.mode.collect { mode ->
-                chipText.text = "current mode: $mode"
-                chipIcon.setImageResource(modeIconRes(mode))
-            }
-        }
-    }
-
-    private fun modeIconRes(mode: StepCounterZC.MotionMode): Int = when (mode) {
-        StepCounterZC.MotionMode.UNKNOWN        -> R.drawable.ic_mode_unknown
-        StepCounterZC.MotionMode.STATIONARY     -> R.drawable.ic_mode_stationary
-        StepCounterZC.MotionMode.STANDING_STILL -> R.drawable.ic_mode_standing_still
-        StepCounterZC.MotionMode.WALKING        -> R.drawable.ic_mode_walking
-        StepCounterZC.MotionMode.RUNNING        -> R.drawable.ic_mode_running
-        StepCounterZC.MotionMode.CYCLING        -> R.drawable.ic_mode_cycling
-        StepCounterZC.MotionMode.DRIVING        -> R.drawable.ic_mode_driving
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -829,13 +821,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
 
-        if (intent.action == "ACTION_REQUEST_BLE_PERMISSIONS") {
-            ensureBlePermission()
-        }
-
-        if (baselineChainFinished) {
-            TrackingServiceManager.ensureTrackingRunning(this)
+        if (intent.getBooleanExtra(DrawerNavigator.EXTRA_OPEN_DRAWER, false)) {
+            findViewById<DrawerLayout>(R.id.drawer_layout).post {
+                findViewById<DrawerLayout>(R.id.drawer_layout)
+                    .openDrawer(GravityCompat.START)
+            }
         }
     }
 

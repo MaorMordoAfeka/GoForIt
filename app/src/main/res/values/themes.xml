@@ -13,7 +13,7 @@
         <item name="colorOnSurface">#1F2A44</item>
         <item name="android:textColorHint">#7B8197</item>
 
-        <item name="android:statusBarColor">#63ABEF</item>
+        <item name="android:statusBarColor">#F7F9F3</item>
     </style>
 
     <style name="QuietHourSliderLabel" parent="Widget.MaterialComponents.Tooltip">
