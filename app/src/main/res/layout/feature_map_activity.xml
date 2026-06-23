@@ -4,12 +4,12 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:layoutDirection="ltr">
-    <!--  Map always full-screen  -->
+    <!--   Map always full-screen   -->
     <org.maplibre.android.maps.MapView
         android:id="@+id/mapView"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
-    <!--  Top app bar: consistent navigation entry point for the map screen.  -->
+    <!--  Top app bar: consistent with Profile, Statistics, and Leaderboard.  -->
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/topAppBar"
         android:layout_width="match_parent"
@@ -22,8 +22,8 @@
         app:navigationIconTint="@color/brand_purple_deep"
         app:title="Map and routes"
         app:titleTextColor="@color/text_purple_dark" />
-    <!--  "You are here" walking figure. Positioned in code at the GPS point;
-             the feet dot marks the exact spot, the figure walks in place above it.  -->
+    <!--   "You are here" walking figure. Positioned in code at the GPS point;
+                 the feet dot marks the exact spot, the figure walks in place above it.   -->
     <FrameLayout
         android:id="@+id/walkingFigureContainer"
         android:layout_width="60dp"
@@ -48,7 +48,7 @@
             android:layout_gravity="bottom|center_horizontal"
             android:background="@drawable/bg_location_dot" />
     </FrameLayout>
-    <!--  Bottom sheet  -->
+    <!--   Bottom sheet   -->
     <androidx.core.widget.NestedScrollView
         android:id="@+id/routeSheet"
         android:layout_width="match_parent"
@@ -69,14 +69,14 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
-            <!--  Drag handle  -->
+            <!--   Drag handle   -->
             <View
                 android:layout_width="44dp"
                 android:layout_height="5dp"
                 android:layout_gravity="center_horizontal"
                 android:layout_marginBottom="12dp"
                 android:background="@color/divider" />
-            <!--  Start  -->
+            <!--   Start   -->
             <com.google.android.material.textfield.TextInputLayout
                 android:id="@+id/startInputLayout"
                 android:layout_width="match_parent"
@@ -109,7 +109,7 @@
                     android:textColorHint="@color/text_muted"
                     android:textSize="18sp" />
             </com.google.android.material.textfield.TextInputLayout>
-            <!--  Destination  -->
+            <!--   Destination   -->
             <com.google.android.material.textfield.TextInputLayout
                 android:id="@+id/destinationInputLayout"
                 android:layout_width="match_parent"
@@ -147,17 +147,32 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
-                android:text="Parks and green space"
+                android:text="Parks and beaches"
                 android:textColor="@color/text_purple_dark" />
 
             <com.google.android.material.slider.Slider
                 android:id="@+id/sParks"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:stepSize="0.05"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="4dp"
+                android:stepSize="0.1"
                 android:value="0.5"
                 android:valueFrom="0"
-                android:valueTo="1" />
+                android:valueTo="1"
+                app:haloColor="@color/soft_lavender"
+                app:haloRadius="20dp"
+                app:labelBehavior="floating"
+                app:thumbColor="@color/brand_purple"
+                app:thumbRadius="12dp"
+                app:tickColorActive="@color/brand_purple"
+                app:tickColorInactive="@color/soft_lavender"
+                app:tickRadiusActive="2dp"
+                app:tickRadiusInactive="2dp"
+                app:tickVisible="true"
+                app:trackColorActive="@color/brand_purple"
+                app:trackColorInactive="@color/soft_lavender"
+                app:trackHeight="6dp" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -170,26 +185,56 @@
                 android:id="@+id/sResidential"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:stepSize="0.05"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="4dp"
+                android:stepSize="0.1"
                 android:value="0.5"
                 android:valueFrom="0"
-                android:valueTo="1" />
+                android:valueTo="1"
+                app:haloColor="@color/soft_lavender"
+                app:haloRadius="20dp"
+                app:labelBehavior="floating"
+                app:thumbColor="@color/brand_purple"
+                app:thumbRadius="12dp"
+                app:tickColorActive="@color/brand_purple"
+                app:tickColorInactive="@color/soft_lavender"
+                app:tickRadiusActive="2dp"
+                app:tickRadiusInactive="2dp"
+                app:tickVisible="true"
+                app:trackColorActive="@color/brand_purple"
+                app:trackColorInactive="@color/soft_lavender"
+                app:trackHeight="6dp" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Lively areas (shops and cafés)"
+                android:text="Lively areas"
                 android:textColor="@color/text_purple_dark" />
 
             <com.google.android.material.slider.Slider
                 android:id="@+id/sBusy"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:stepSize="0.05"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="4dp"
+                android:stepSize="0.1"
                 android:value="0.5"
                 android:valueFrom="0"
-                android:valueTo="1" />
+                android:valueTo="1"
+                app:haloColor="@color/soft_lavender"
+                app:haloRadius="20dp"
+                app:labelBehavior="floating"
+                app:thumbColor="@color/brand_purple"
+                app:thumbRadius="12dp"
+                app:tickColorActive="@color/brand_purple"
+                app:tickColorInactive="@color/soft_lavender"
+                app:tickRadiusActive="2dp"
+                app:tickRadiusInactive="2dp"
+                app:tickVisible="true"
+                app:trackColorActive="@color/brand_purple"
+                app:trackColorInactive="@color/soft_lavender"
+                app:trackHeight="6dp" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -202,17 +247,37 @@
                 android:id="@+id/sDistanceKm"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="4dp"
                 android:stepSize="0.5"
                 android:value="2"
                 android:valueFrom="0"
-                android:valueTo="10" />
+                android:valueTo="10"
+                app:haloColor="@color/soft_mint"
+                app:haloRadius="20dp"
+                app:labelBehavior="floating"
+                app:thumbColor="@color/brand_mint"
+                app:thumbRadius="12dp"
+                app:tickColorActive="@color/brand_mint"
+                app:tickColorInactive="@color/soft_mint"
+                app:tickRadiusActive="2dp"
+                app:tickRadiusInactive="2dp"
+                app:tickVisible="true"
+                app:trackColorActive="@color/brand_mint"
+                app:trackColorInactive="@color/soft_mint"
+                app:trackHeight="6dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnPlan"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="Plan walking route" />
+                android:layout_height="56dp"
+                android:layout_marginTop="12dp"
+                android:text="Plan walking route"
+                android:textAllCaps="false"
+                android:textColor="@android:color/white"
+                android:textStyle="bold"
+                app:backgroundTint="@color/brand_purple"
+                app:cornerRadius="28dp" />
 
             <TextView
                 android:id="@+id/tvHint"
@@ -221,7 +286,7 @@
                 android:layout_marginTop="8dp"
                 android:text="Status: idle"
                 android:textColor="@color/text_muted" />
-            <!--  Developer tools (diagnostics, not for regular users)  -->
+            <!--   Developer tools (diagnostics, not for regular users)   -->
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
@@ -234,11 +299,11 @@
                 android:layout_marginTop="14dp"
                 android:layout_marginBottom="8dp"
                 android:letterSpacing="0.06"
-                android:text="DEVELOPER TOOLS"
+                android:text="Diagnostical tools for the route"
                 android:textColor="@color/text_muted"
                 android:textSize="11sp"
                 android:textStyle="bold" />
-            <!--  Row 1: Show H3 + Clear  -->
+            <!--   Row 1: Show H3 + Clear   -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -268,20 +333,45 @@
                     android:textSize="11sp"
                     app:backgroundTint="@color/soft_lavender" />
             </LinearLayout>
-            <!--  Row 2: Show POIs  -->
+            <!--   Row 2: Show POIs   -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnShowPoi"
                 style="@style/Widget.MaterialComponents.Button"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"
-                android:text="Show POIs (route reason)"
+                android:text="Show Points Of Interest (route reason)"
                 android:textColor="@color/brand_purple_deep"
                 android:textSize="11sp"
                 app:backgroundTint="@color/soft_lavender" />
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>
-    <!--  Route options — secondary action  -->
+    <!--   Compass — custom 56dp control, matching the normal FAB size   -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/btnCompass"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="338dp"
+        android:clickable="true"
+        android:contentDescription="Reset map north"
+        android:focusable="true"
+        android:foreground="?attr/selectableItemBackgroundBorderless"
+        app:cardBackgroundColor="@color/soft_lavender"
+        app:cardCornerRadius="28dp"
+        app:cardElevation="12dp"
+        app:cardUseCompatPadding="false"
+        app:layout_anchor="@id/mapView"
+        app:layout_anchorGravity="bottom|end">
+
+        <ImageView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/ic_map_compass" />
+    </com.google.android.material.card.MaterialCardView>
+    <!--   Route options — secondary action   -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabMenu"
         android:layout_width="wrap_content"
@@ -297,7 +387,7 @@
         app:rippleColor="@color/soft_lavender"
         app:srcCompat="@drawable/ic_menu_sort_by_size"
         app:tint="@color/brand_purple_deep" />
-    <!--  Center on my GPS location — primary action  -->
+    <!--   Center on my GPS location — primary action   -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabMyLocation"
         android:layout_width="wrap_content"

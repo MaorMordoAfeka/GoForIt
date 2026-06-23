@@ -261,13 +261,30 @@ class MapAndRoutesActivity : AppCompatActivity() {
 
         // Keep the full map-control stack hidden when the route sheet is expanded.
         // This includes: Compass → Route options → My location.
-        sheetBehavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
-            override fun onStateChanged(bottomSheet: View, newState: Int) {
-                val hidden = newState == BottomSheetBehavior.STATE_EXPANDED
+        val btnCompass = findViewById<View>(R.id.btnCompass)
 
-                fabMyLocation.visibility = if (hidden) View.GONE else View.VISIBLE
-                fabMenu.visibility = if (hidden) View.GONE else View.VISIBLE
-                maplibreMap?.uiSettings?.setCompassEnabled(!hidden)
+        sheetBehavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
+
+            override fun onStateChanged(bottomSheet: View, newState: Int) {
+                when (newState) {
+                    BottomSheetBehavior.STATE_HALF_EXPANDED,
+                    BottomSheetBehavior.STATE_EXPANDED -> {
+                        btnCompass.visibility = View.GONE
+                        fabMenu.visibility = View.GONE
+                        fabMyLocation.visibility = View.GONE
+
+                        // Hides the MapLibre compass as well.
+                        maplibreMap?.uiSettings?.setCompassEnabled(false)
+                    }
+
+                    BottomSheetBehavior.STATE_COLLAPSED -> {
+                        btnCompass.visibility = View.VISIBLE
+                        fabMenu.visibility = View.VISIBLE
+                        fabMyLocation.visibility = View.VISIBLE
+
+                        maplibreMap?.uiSettings?.setCompassEnabled(true)
+                    }
+                }
             }
 
             override fun onSlide(bottomSheet: View, slideOffset: Float) = Unit
