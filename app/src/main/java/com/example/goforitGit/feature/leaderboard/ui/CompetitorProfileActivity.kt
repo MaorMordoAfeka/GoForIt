@@ -36,6 +36,9 @@ class CompetitorProfileActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        supportActionBar?.hide()
+
         binding = FeatureCompetitorProfileActivityBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
