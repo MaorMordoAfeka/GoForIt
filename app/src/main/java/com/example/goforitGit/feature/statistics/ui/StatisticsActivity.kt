@@ -12,6 +12,7 @@ import com.example.goforitGit.core.data.StepsData.StepRepository
 import com.example.goforitGit.core.util.FourHourBuckets.FourHourBucketsSinceBoot
 import com.example.goforitGit.core.util.StepsUtils.StepCounterZC.MotionMode
 import com.example.goforitGit.feature.steps.viewmodel.StepViewModel
+import com.example.goforitGit.navigation.DrawerNavigator
 import com.google.android.material.appbar.MaterialToolbar
 import java.time.LocalDate
 import java.time.ZoneId
@@ -68,7 +69,7 @@ class StatisticsActivity : AppCompatActivity() {
         setContentView(R.layout.feature_statistics_activity)
 
         findViewById<MaterialToolbar>(R.id.toolbar).setNavigationOnClickListener {
-            onBackPressedDispatcher.onBackPressed()
+            DrawerNavigator.open(this)
         }
 
         chart = findViewById(R.id.hourlyChart)
@@ -81,8 +82,6 @@ class StatisticsActivity : AppCompatActivity() {
         avgCadenceView = findViewById(R.id.statAvgCadence)
 
         val paceView = findViewById<TextView>(R.id.statPace)
-        val modeText = findViewById<TextView>(R.id.statModeText)
-        val modeIcon = findViewById<ImageView>(R.id.statModeIcon)
 
         vm.steps.observe(this) { total ->
             totalStepsView.text = formatCount(total)
@@ -95,11 +94,6 @@ class StatisticsActivity : AppCompatActivity() {
         vm.kmhLD.observe(this) { speedMps ->
             val kmh = if (speedMps != null) speedMps * 3.6f else 0f
             paceView.text = String.format(Locale.US, "%.1f", kmh)
-        }
-
-        vm.mode.observe(this) { mode ->
-            modeText.text = "current mode: $mode"
-            modeIcon.setImageResource(mode.iconRes())
         }
 
         refreshDailyStats()

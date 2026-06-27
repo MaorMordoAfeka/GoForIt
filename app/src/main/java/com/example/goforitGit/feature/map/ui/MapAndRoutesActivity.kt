@@ -223,7 +223,9 @@ class MapAndRoutesActivity : AppCompatActivity() {
             isFitToContents = false
             halfExpandedRatio = 0.45f
             state = BottomSheetBehavior.STATE_COLLAPSED
-            isHideable = false
+            isHideable = true
+            isDraggable = true
+            skipCollapsed = false
         }
 
         val fabMenu = findViewById<FloatingActionButton>(R.id.fabMenu)
@@ -246,20 +248,55 @@ class MapAndRoutesActivity : AppCompatActivity() {
             maplibreMap?.animateCamera(CameraUpdateFactory.newLatLngZoom(loc, 16.0))
         }
 
-        // Keep both FABs drawn on top of the map/overlays.
+        // Keep all three custom controls above the map and the sheet.
+        val btnCompass = findViewById<View>(R.id.btnCompass)
+        btnCompass.bringToFront()
         fabMenu.bringToFront()
         fabMyLocation.bringToFront()
 
-        // Hide both FABs when the menu sheet is fully expanded upward
-        // (they would otherwise sit on top of the sheet content).
+        // Reset the map heading to north without changing the user's location,
+        // zoom level, or 3D tilt.
+        btnCompass.setOnClickListener {
+            val map = maplibreMap ?: return@setOnClickListener
+            val current = map.cameraPosition
+            val target = current.target ?: return@setOnClickListener
+
+            map.animateCamera(
+                CameraUpdateFactory.newCameraPosition(
+                    CameraPosition.Builder()
+                        .target(target)
+                        .zoom(current.zoom)
+                        .tilt(current.tilt)
+                        .bearing(0.0)
+                        .build()
+                )
+            )
+        }
+
+        // Hide the controls only while the preferences sheet is visibly open.
+        // A fully hidden sheet must always restore them so the user can reopen it.
         sheetBehavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
             override fun onStateChanged(bottomSheet: View, newState: Int) {
-                val hidden = newState == BottomSheetBehavior.STATE_EXPANDED
-                fabMyLocation.visibility = if (hidden) View.GONE else View.VISIBLE
-                fabMenu.visibility = if (hidden) View.GONE else View.VISIBLE
+                when (newState) {
+                    BottomSheetBehavior.STATE_HALF_EXPANDED,
+                    BottomSheetBehavior.STATE_EXPANDED -> {
+                        btnCompass.visibility = View.GONE
+                        fabMenu.visibility = View.GONE
+                        fabMyLocation.visibility = View.GONE
+                    }
+
+                    BottomSheetBehavior.STATE_COLLAPSED,
+                    BottomSheetBehavior.STATE_HIDDEN -> {
+                        btnCompass.visibility = View.VISIBLE
+                        fabMenu.visibility = View.VISIBLE
+                        fabMyLocation.visibility = View.VISIBLE
+                    }
+                }
             }
+
             override fun onSlide(bottomSheet: View, slideOffset: Float) = Unit
         })
+
 
         tileServer = MbTilesServer(this)
         val ok = tileServer.startServerSafely()
@@ -304,13 +341,10 @@ class MapAndRoutesActivity : AppCompatActivity() {
             maplibreMap = map
             // Keep the walking figure pinned to its GPS point as the map moves.
             map.addOnCameraMoveListener { updateFigurePosition() }
-            // Drop the compass well below the status bar (top-right) and use a
-            // custom icon with built-in padding so it isn't clipped at the top.
-            map.uiSettings.compassGravity = Gravity.TOP or Gravity.END
-            map.uiSettings.setCompassMargins(0, dp(96f).toInt(), dp(16f).toInt(), 0)
-            ContextCompat.getDrawable(this, R.drawable.ic_map_compass)?.let {
-                map.uiSettings.setCompassImage(it)
-            }
+            // The screen uses its own custom compass control, so the MapLibre
+            // built-in compass stays disabled to prevent overlap or duplicate taps.
+            map.uiSettings.setCompassEnabled(false)
+
             map.setStyle(Style.Builder().fromUri("asset://style_vector_localhost.json")) { style ->
                 mapStyle = style
 

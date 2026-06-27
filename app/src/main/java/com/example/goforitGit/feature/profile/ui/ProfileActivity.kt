@@ -24,6 +24,7 @@ import androidx.lifecycle.lifecycleScope
 import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.databinding.FeatureProfileActivityBinding
+import com.example.goforitGit.navigation.DrawerNavigator
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
@@ -156,7 +157,7 @@ class ProfileActivity : AppCompatActivity() {
     private fun setupToolbar() {
         setSupportActionBar(binding.toolbar)
         binding.toolbar.setNavigationOnClickListener {
-            onBackPressedDispatcher.onBackPressed()
+            DrawerNavigator.open(this)
         }
         binding.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {

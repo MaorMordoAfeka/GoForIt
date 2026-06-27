@@ -17,7 +17,18 @@ const DEFAULT_TZ = "Asia/Jerusalem";
 const DEFAULT_QUIET_START_HOUR = 22;
 const DEFAULT_QUIET_END_HOUR = 8;
 const ALL_INTERVALS = [0, 1, 2, 3, 4, 5] as const;
-const COLLEGE_AREA_BONUS_POINTS_PER_STEP = 10;
+
+// Campus-step bonus.
+// Base activity is worth 1 point per 100 steps (see calcStepPoints), i.e. ~0.01
+// points/step. The old model awarded a FLAT 10 points for every qualified step
+// inside the college polygon, making a single campus step worth as much as
+// 1,000 ordinary steps and rendering the daily ranking meaningless.
+//
+// New model: a qualified campus step earns a *bonus* of 1 point per
+// COLLEGE_AREA_STEPS_PER_BONUS_POINT steps, on top of the normal step value.
+// With 100, a campus step is worth ~2x a normal step. Lower the divisor to make
+// campus time more rewarding (e.g. 50 -> ~3x), raise it to make it gentler.
+const COLLEGE_AREA_STEPS_PER_BONUS_POINT = 100;
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -149,6 +160,18 @@ function clampSix(arr: unknown): number[] {
 
 function calcStepPoints(totalSteps: number): number {
   return Math.floor(totalSteps / 100);
+}
+
+/**
+ * Bonus points earned for a CUMULATIVE number of qualified campus steps.
+ *
+ * Computing the bonus from the cumulative total (rather than per-delta) keeps
+ * uploads idempotent: re-submitting the same total yields the same bonus, and
+ * integer rounding never drifts across many small syncs.
+ */
+function calcCollegeAreaBonus(qualifiedSteps: number): number {
+  if (!Number.isFinite(qualifiedSteps) || qualifiedSteps <= 0) return 0;
+  return Math.floor(qualifiedSteps / COLLEGE_AREA_STEPS_PER_BONUS_POINT);
 }
 
 function intervalStart(dayKey: string, intervalIndex: number, tz: string): DateTime {
@@ -312,6 +335,131 @@ function compareLeaderboardRows(a: LeaderboardRow, b: LeaderboardRow): number {
   return a.uid.localeCompare(b.uid);
 }
 
+// -----------------------------------------------------------------------------
+// Faculty standings (per-day aggregation of the individual leaderboard)
+// -----------------------------------------------------------------------------
+
+type FacultyStanding = {
+  faculty: string;
+  rank: number;
+  totalPoints: number;
+  totalSteps: number;
+  bonusPoints: number;
+  memberCount: number;
+  averagePoints: number;
+};
+
+const GENERAL_FACULTY = "General";
+
+function normalizeFacultyName(faculty: string): string {
+  const trimmed = typeof faculty === "string" ? faculty.trim() : "";
+  return trimmed.length > 0 ? trimmed : GENERAL_FACULTY;
+}
+
+/** Firestore doc IDs may not contain "/" and may not be "." or "..". */
+function facultyDocId(faculty: string): string {
+  const safe = normalizeFacultyName(faculty).replace(/\//g, "_");
+  return safe === "." || safe === ".." ? GENERAL_FACULTY : safe;
+}
+
+/**
+ * Rolls the individual leaderboard up into one row per faculty.
+ * Faculties are ranked by total points (tie-break: average points, then steps),
+ * and both the total and the per-member average are stored so the client can
+ * present a fair picture regardless of faculty size.
+ */
+function aggregateFacultyStandings(leaderboard: LeaderboardRow[]): FacultyStanding[] {
+  const byFaculty = new Map<string, FacultyStanding>();
+
+  for (const row of leaderboard) {
+    const faculty = normalizeFacultyName(row.faculty);
+    const cur =
+      byFaculty.get(faculty) ??
+      {
+        faculty,
+        rank: 0,
+        totalPoints: 0,
+        totalSteps: 0,
+        bonusPoints: 0,
+        memberCount: 0,
+        averagePoints: 0,
+      };
+
+    cur.totalPoints += row.totalPoints;
+    cur.totalSteps += row.totalSteps;
+    cur.bonusPoints += row.bonusPoints;
+    cur.memberCount += 1;
+    byFaculty.set(faculty, cur);
+  }
+
+  const standings = Array.from(byFaculty.values());
+  for (const s of standings) {
+    s.averagePoints = s.memberCount > 0 ? Math.round(s.totalPoints / s.memberCount) : 0;
+  }
+
+  standings.sort((a, b) => {
+    if (b.totalPoints !== a.totalPoints) return b.totalPoints - a.totalPoints;
+    if (b.averagePoints !== a.averagePoints) return b.averagePoints - a.averagePoints;
+    if (b.totalSteps !== a.totalSteps) return b.totalSteps - a.totalSteps;
+    return a.faculty.localeCompare(b.faculty);
+  });
+
+  standings.forEach((s, idx) => (s.rank = idx + 1));
+  return standings;
+}
+
+async function writeFacultyStandingsForDay(
+  dayKey: string,
+  leaderboard: LeaderboardRow[]
+): Promise<void> {
+  const standings = aggregateFacultyStandings(leaderboard);
+  const col = db.collection("leaderboards_daily").doc(dayKey).collection("faculties");
+  const existingSnap = await col.get();
+
+  const existingIds = new Set(existingSnap.docs.map((d) => d.id));
+  const wantedIds = new Set(standings.map((s) => facultyDocId(s.faculty)));
+
+  const ops: Array<(batch: admin.firestore.WriteBatch) => void> = [];
+
+  for (const doc of existingSnap.docs) {
+    if (!wantedIds.has(doc.id)) {
+      ops.push((batch) => batch.delete(doc.ref));
+    }
+  }
+
+  for (const s of standings) {
+    const id = facultyDocId(s.faculty);
+    ops.push((batch) => {
+      const payload: Record<string, unknown> = {
+        faculty: s.faculty,
+        dayKey,
+        rank: s.rank,
+        totalPoints: s.totalPoints,
+        totalSteps: s.totalSteps,
+        bonusPoints: s.bonusPoints,
+        memberCount: s.memberCount,
+        averagePoints: s.averagePoints,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      if (!existingIds.has(id)) {
+        payload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+
+      batch.set(col.doc(id), payload, { merge: true });
+    });
+  }
+
+  const chunkSize = 400;
+  for (let i = 0; i < ops.length; i += chunkSize) {
+    const batch = db.batch();
+    for (const op of ops.slice(i, i + chunkSize)) {
+      op(batch);
+    }
+    await batch.commit();
+  }
+}
+
 async function writeLeaderboardForDay(dayKey: string, leaderboard: LeaderboardRow[]): Promise<void> {
   const entriesCol = db.collection("leaderboards_daily").doc(dayKey).collection("entries");
   const existingSnap = await entriesCol.get();
@@ -363,6 +511,9 @@ async function writeLeaderboardForDay(dayKey: string, leaderboard: LeaderboardRo
     }
     await batch.commit();
   }
+
+  // Keep the per-faculty ranking in sync with the individual entries we just wrote.
+  await writeFacultyStandingsForDay(dayKey, leaderboard);
 }
 
 async function recalculateLeaderboardForDay(dayKey: string): Promise<void> {
@@ -1113,6 +1264,7 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
 
   let appliedDelta = 0;
   let acceptedQualifiedSteps = 0;
+  let awardedBonusPoints = 0;
 
   await db.runTransaction(async (tx) => {
     const dailySnap = await tx.get(dailyRef);
@@ -1133,10 +1285,14 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
     const prevBonusPoints =
       Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
 
-    const collegeAreaBonusPoints =
-      acceptedQualifiedSteps * COLLEGE_AREA_BONUS_POINTS_PER_STEP;
+    // Diff the cumulative campus bonus for the old vs. new qualified-step totals
+    // to get the exact integer delta to apply. This stays correct even when an
+    // individual sync does not cross a whole-point boundary.
+    const collegeAreaBonusPoints = calcCollegeAreaBonus(acceptedQualifiedSteps);
+    const prevCollegeAreaBonusPoints = calcCollegeAreaBonus(prevQualifiedSteps);
 
-    const bonusDelta = appliedDelta * COLLEGE_AREA_BONUS_POINTS_PER_STEP;
+    const bonusDelta = collegeAreaBonusPoints - prevCollegeAreaBonusPoints;
+    awardedBonusPoints = bonusDelta;
 
     tx.set(
       dailyRef,
@@ -1183,7 +1339,7 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
     dayKey,
     acceptedQualifiedSteps,
     appliedDelta,
-    awardedPoints: appliedDelta * COLLEGE_AREA_BONUS_POINTS_PER_STEP,
+    awardedPoints: awardedBonusPoints,
     leaderboardRecalculated,
   };
 });

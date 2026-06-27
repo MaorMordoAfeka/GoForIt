@@ -1,34 +1,64 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Compass icon for the MapLibre compass view. Drawn inside a 48x48 viewport
-  with ~5dp of transparent padding all around, so the glyph is never clipped
-  by the compass ImageView bounds. North = red needle (up), South = grey.
--->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="48dp"
-    android:height="48dp"
-    android:viewportWidth="48"
-    android:viewportHeight="48">
+    android:width="56dp"
+    android:height="56dp"
+    android:viewportWidth="56"
+    android:viewportHeight="56">
 
-    <!-- White disc background -->
+    <!-- Large soft lavender circular button background -->
+    <path
+        android:fillColor="#F7F1FA"
+        android:pathData="M28,3
+            C14.19,3 3,14.19 3,28
+            C3,41.81 14.19,53 28,53
+            C41.81,53 53,41.81 53,28
+            C53,14.19 41.81,3 28,3Z" />
+
+    <!-- Purple compass ring -->
+    <path
+        android:fillColor="#7E3FA8"
+        android:pathData="M28,10
+            C18.06,10 10,18.06 10,28
+            C10,37.94 18.06,46 28,46
+            C37.94,46 46,37.94 46,28
+            C46,18.06 37.94,10 28,10Z" />
+
+    <!-- White inner face -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M24,5 A19,19 0 1 0 24,43 A19,19 0 1 0 24,5 Z" />
+        android:pathData="M28,14
+            C20.27,14 14,20.27 14,28
+            C14,35.73 20.27,42 28,42
+            C35.73,42 42,35.73 42,28
+            C42,20.27 35.73,14 28,14Z" />
 
-    <!-- Thin border ring -->
+    <!-- North needle -->
     <path
-        android:fillColor="#00000000"
-        android:strokeColor="#D8D2E6"
-        android:strokeWidth="1.5"
-        android:pathData="M24,5 A19,19 0 1 0 24,43 A19,19 0 1 0 24,5 Z" />
+        android:fillColor="#7E3FA8"
+        android:pathData="M28,14L33.8,28L22.2,28Z" />
 
-    <!-- North needle (red) -->
+    <!-- South needle -->
     <path
-        android:fillColor="#E53935"
-        android:pathData="M24,9 L19,24 L29,24 Z" />
+        android:fillColor="#C7A6E3"
+        android:pathData="M28,42L22.2,28L33.8,28Z" />
 
-    <!-- South needle (grey) -->
+    <!-- White ring around center -->
+    <!-- Smaller white ring around center -->
     <path
-        android:fillColor="#5C5F7A"
-        android:pathData="M24,39 L19,24 L29,24 Z" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,24
+        C25.79,24 24,25.79 24,28
+        C24,30.21 25.79,32 28,32
+        C30.21,32 32,30.21 32,28
+        C32,25.79 30.21,24 28,24Z" />
+
+    <!-- Purple center -->
+    <path
+        android:fillColor="#7E3FA8"
+        android:pathData="M28,24.8
+            C26.24,24.8 24.8,26.24 24.8,28
+            C24.8,29.76 26.24,31.2 28,31.2
+            C29.76,31.2 31.2,29.76 31.2,28
+            C31.2,26.24 29.76,24.8 28,24.8Z" />
+
 </vector>

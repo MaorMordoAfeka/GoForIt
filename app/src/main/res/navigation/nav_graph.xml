@@ -5,29 +5,35 @@
     android:id="@+id/nav_graph"
     app:startDestination="@id/nav_steps">
 
-    <!-- This is the default screen when the app opens -->
+    <!-- Main home / live step-counting screen -->
     <fragment
         android:id="@+id/nav_steps"
         android:name="com.example.goforitGit.feature.steps.ui.StepsFragment"
-        android:label="Steps"
+        android:label="Home"
         tools:layout="@layout/feature_steps_fragment" />
 
-    <fragment
-        android:id="@+id/nav_home"
-        android:name="com.example.goforitGit.feature.home.ui.HomeFragment"
-        android:label="Home"
-        tools:layout="@layout/fragment_home" />
+    <!-- Statistics screen -->
+    <activity
+        android:id="@+id/nav_statistics"
+        android:name="com.example.goforitGit.feature.statistics.ui.StatisticsActivity"
+        android:label="Statistics &amp; progress" />
 
-    <fragment
-        android:id="@+id/nav_gallery"
-        android:name="com.example.goforitGit.feature.gallery.ui.GalleryFragment"
-        android:label="Gallery"
-        tools:layout="@layout/fragment_gallery" />
+    <!-- Map and walking-route planner -->
+    <activity
+        android:id="@+id/nav_map"
+        android:name="com.example.goforitGit.feature.map.ui.MapAndRoutesActivity"
+        android:label="Map &amp; routes" />
 
-    <fragment
-        android:id="@+id/nav_slideshow"
-        android:name="com.example.goforitGit.feature.slideshow.ui.SlideshowFragment"
-        android:label="Slideshow"
-        tools:layout="@layout/fragment_slideshow" />
+    <!-- Campus competition ranking -->
+    <activity
+        android:id="@+id/nav_leaderboard"
+        android:name="com.example.goforitGit.feature.leaderboard.ui.LeaderboardActivity"
+        android:label="Leaderboard" />
+
+    <!-- User account and reminder preferences -->
+    <activity
+        android:id="@+id/nav_profile"
+        android:name="com.example.goforitGit.feature.profile.ui.ProfileActivity"
+        android:label="Profile" />
 
 </navigation>

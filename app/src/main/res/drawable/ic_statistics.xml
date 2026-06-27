@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Statistics icon: four rounded bars with a rising trend line. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#7C39A0">
+
+    <!-- Bottom baseline -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M3.5,20.5
+            C3.5,20.22 3.72,20 4,20
+            H20
+            C20.28,20 20.5,20.22 20.5,20.5
+            C20.5,20.78 20.28,21 20,21
+            H4
+            C3.72,21 3.5,20.78 3.5,20.5 Z" />
+
+    <!-- Bar 1 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M4.4,12.1
+            C4.4,11.72 4.7,11.42 5.08,11.42
+            H6.72
+            C7.1,11.42 7.4,11.72 7.4,12.1
+            V18.85
+            C7.4,19.23 7.1,19.53 6.72,19.53
+            H5.08
+            C4.7,19.53 4.4,19.23 4.4,18.85 Z" />
+
+    <!-- Bar 2 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M8.25,8.65
+            C8.25,8.27 8.55,7.97 8.93,7.97
+            H10.57
+            C10.95,7.97 11.25,8.27 11.25,8.65
+            V18.85
+            C11.25,19.23 10.95,19.53 10.57,19.53
+            H8.93
+            C8.55,19.53 8.25,19.23 8.25,18.85 Z" />
+
+    <!-- Bar 3 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M12.1,12.05
+            C12.1,11.67 12.4,11.37 12.78,11.37
+            H14.42
+            C14.8,11.37 15.1,11.67 15.1,12.05
+            V18.85
+            C15.1,19.23 14.8,19.53 14.42,19.53
+            H12.78
+            C12.4,19.53 12.1,19.23 12.1,18.85 Z" />
+
+    <!-- Bar 4 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M15.95,9.95
+            C15.95,9.57 16.25,9.27 16.63,9.27
+            H18.27
+            C18.65,9.27 18.95,9.57 18.95,9.95
+            V18.85
+            C18.95,19.23 18.65,19.53 18.27,19.53
+            H16.63
+            C16.25,19.53 15.95,19.23 15.95,18.85 Z" />
+
+    <!-- Rising line -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#000000"
+        android:strokeWidth="1.35"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M5.6,8.3 L9.7,4.95 L13.65,8.15 L18.35,5.15" />
+
+    <!-- Data point 1 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M5.6,7.35
+            a0.95,0.95 0,1 0,0.01,0 Z" />
+
+    <!-- Data point 2 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M9.7,4
+            a0.95,0.95 0,1 0,0.01,0 Z" />
+
+    <!-- Data point 3 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M13.65,7.2
+            a0.95,0.95 0,1 0,0.01,0 Z" />
+
+    <!-- Data point 4 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M18.35,4.2
+            a0.95,0.95 0,1 0,0.01,0 Z" />
+
+</vector>
