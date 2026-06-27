@@ -42,7 +42,10 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
 import android.view.View
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -79,6 +82,33 @@ class MapAndRoutesActivity : AppCompatActivity() {
     // POI overlay
     private val poiSourceId  = "poi-source"
     private val poiLayerId   = "poi-layer"
+
+    // BLE bonus stations overlay
+    private val bleSourceId     = "ble-bonus-source"
+    private val bleLayerId      = "ble-bonus-layer"
+    private val TROPHY_IMAGE_ID = "trophy-bonus-icon"
+
+    // Two BLE bonus station locations inside Afeka College campus
+    // (verified against college_polygon.json — both confirmed inside boundary)
+    // Station 1 — south side, near the main entrance
+    // Station 2 — north side, near the back/parking area
+    private val bleStationsGeoJson = """
+        {
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "properties": { "name": "BLE Bonus Station 1" },
+              "geometry": { "type": "Point", "coordinates": [34.8178, 32.1130] }
+            },
+            {
+              "type": "Feature",
+              "properties": { "name": "BLE Bonus Station 2" },
+              "geometry": { "type": "Point", "coordinates": [34.8183, 32.1168] }
+            }
+          ]
+        }
+    """.trimIndent()
 
     private val emptyFC = """{"type":"FeatureCollection","features":[]}"""
 
@@ -352,6 +382,7 @@ class MapAndRoutesActivity : AppCompatActivity() {
                 updatePins(style)
                 ensureH3Layers(style)
                 ensurePoiLayer(style)
+                ensureBleLayer(style)
 
                 map.cameraPosition = CameraPosition.Builder()
                     .target(LatLng(32.0853, 34.7818))
@@ -510,6 +541,35 @@ class MapAndRoutesActivity : AppCompatActivity() {
                     circleStrokeColor(Color.WHITE),
                     circleStrokeWidth(1.5f),
                     circleOpacity(0.9f)
+                )
+            )
+        }
+    }
+
+    private fun ensureBleLayer(style: Style) {
+        if (style.getImage(TROPHY_IMAGE_ID) == null) {
+            ContextCompat.getDrawable(this, R.drawable.ic_trophy_bonus)?.let { drawable ->
+                val size = dp(40f).toInt().coerceAtLeast(1)
+                val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                val canvas = AndroidCanvas(bitmap)
+                drawable.setBounds(0, 0, size, size)
+                drawable.draw(canvas)
+                style.addImage(TROPHY_IMAGE_ID, bitmap)
+            }
+        }
+
+        if (style.getSource(bleSourceId) == null) {
+            style.addSource(GeoJsonSource(bleSourceId, bleStationsGeoJson))
+        }
+
+        if (style.getLayer(bleLayerId) == null) {
+            style.addLayer(
+                SymbolLayer(bleLayerId, bleSourceId).withProperties(
+                    iconImage(TROPHY_IMAGE_ID),
+                    iconSize(1.2f),
+                    iconAllowOverlap(literal(true)),
+                    iconIgnorePlacement(literal(true)),
+                    iconAnchor(Property.ICON_ANCHOR_BOTTOM)
                 )
             )
         }
