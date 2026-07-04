@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Rounded "pill" background for the ACTIVE / COMPLETED / EXPIRED status
+  label on the active-challenge card. The solid colour is a neutral
+  placeholder; PersonalChallengesActivity tints it at runtime via
+  backgroundTintList to match the current status.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="100dp" />
+    <solid android:color="#4FB36A" />
+</shape>

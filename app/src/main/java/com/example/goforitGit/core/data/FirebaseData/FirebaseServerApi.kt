@@ -1,5 +1,6 @@
 package com.example.goforitGit.core.data.FirebaseData
 
+import com.example.goforitGit.feature.challenges.model.PersonalChallengesState
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
@@ -27,6 +28,8 @@ import kotlin.collections.get
  *    - uploadStepInterval
  *    - recordBonusVisit
  *    - syncCollegeAreaSteps
+ *    - getMyPersonalChallenges
+ *    - acceptPersonalChallenge
  * 3) Providing small helpers for current dayKey + current 4-hour interval
  *
  * Not responsible for:
@@ -510,5 +513,81 @@ object FirebaseServerApi {
         )
 
         return callOkResult("syncCollegeAreaSteps", data)
+    }
+
+    // -------------------------------------------------------------------------
+    // PERSONAL CHALLENGES (server-authoritative)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Loads the current user's personal-challenge state for today.
+     *
+     * The server:
+     * - resolves the user's timezone and the current dayKey,
+     * - evaluates any active challenge against trusted values before returning,
+     * - returns either the active challenge or the three daily offers with
+     *   availability + reasons, plus server clock + midnight for the countdown.
+     *
+     * The client never computes targets, progress, rewards, or completion; it
+     * only renders what the server returns.
+     *
+     * Expected callable: getMyPersonalChallenges
+     */
+    suspend fun getMyPersonalChallengesResult(): Result<PersonalChallengesState> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            val res = functions.getHttpsCallable("getMyPersonalChallenges").call().await()
+            val map = res.data as? Map<*, *>
+                ?: error("getMyPersonalChallenges returned invalid payload.")
+
+            val ok = map["ok"] as? Boolean ?: false
+            if (!ok) error("getMyPersonalChallenges returned ok=false.")
+
+            PersonalChallengesState.fromMap(map)
+        }
+    }
+
+    /**
+     * Accepts one personal challenge for today.
+     *
+     * The server validates availability, enforces one-challenge-per-day inside a
+     * transaction, freezes all parameters (baseline, target, reward, interval,
+     * steps-at-acceptance, timestamp), evaluates once, and returns the canonical
+     * state. Passing [difficulty] is only meaningful for Raise Your Baseline;
+     * send null for the other challenges.
+     *
+     * Expected callable: acceptPersonalChallenge
+     */
+    suspend fun acceptPersonalChallengeResult(
+        challengeType: String,
+        difficulty: String?,
+    ): Result<PersonalChallengesState> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            require(challengeType.isNotBlank()) { "challengeType is required." }
+
+            val payload = HashMap<String, Any?>()
+            payload["challengeType"] = challengeType
+            if (difficulty != null) {
+                payload["difficulty"] = difficulty
+            }
+
+            val res = functions.getHttpsCallable("acceptPersonalChallenge").call(payload).await()
+            val map = res.data as? Map<*, *>
+                ?: error("acceptPersonalChallenge returned invalid payload.")
+
+            val ok = map["ok"] as? Boolean ?: false
+            if (!ok) error("acceptPersonalChallenge returned ok=false.")
+
+            PersonalChallengesState.fromMap(map)
+        }
     }
 }

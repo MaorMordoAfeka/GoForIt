@@ -51,6 +51,12 @@
         <!-- Activities -->
         <!-- ===================================================== -->
         <activity
+            android:name=".feature.challenges.ui.PersonalChallengesActivity"
+            android:exported="false"
+            android:label="@string/pc_screen_title"
+            android:parentActivityName=".navigation.MainActivity"
+            android:theme="@style/Theme.GoForIt.NoActionBar" />
+        <activity
             android:name=".feature.profile.ui.ProfileActivity"
             android:exported="false"
             android:theme="@style/Theme.GoForIt.NoActionBar" />
