@@ -30,6 +30,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.slider.Slider
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import kotlinx.coroutines.launch
 import org.maplibre.android.MapLibre
@@ -46,6 +47,9 @@ import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Typeface
 import android.view.View
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -87,6 +91,14 @@ class MapAndRoutesActivity : AppCompatActivity() {
     private val bleSourceId     = "ble-bonus-source"
     private val bleLayerId      = "ble-bonus-layer"
     private val TROPHY_IMAGE_ID = "trophy-bonus-icon"
+
+    // Safety overlay — Tel Aviv crime-risk neighborhoods (toggle-controlled, independent
+    // of route planning; does not read or affect the parks/residential/busy/distance sliders).
+    private val crimeSourceId = "crime-safety-source"
+    private val crimeLayerId  = "crime-safety-layer"
+    private val crimeLabelSourceId = "crime-safety-label-source"
+    private val crimeLabelLayerId  = "crime-safety-label-layer"
+    private fun crimeRiskIconId(riskLevel: Int) = "crime-risk-triangle-$riskLevel"
 
     // Two BLE bonus station locations inside Afeka College campus
     // (verified against college_polygon.json — both confirmed inside boundary)
@@ -174,6 +186,7 @@ class MapAndRoutesActivity : AppCompatActivity() {
     private lateinit var btnShowH3: MaterialButton
     private lateinit var btnClearH3: MaterialButton
     private lateinit var btnShowPoi: MaterialButton
+    private lateinit var switchSafetyOverlay: SwitchMaterial
 
     private var startPoint: LatLng? = null
     private var destPoint: LatLng? = null
@@ -244,6 +257,7 @@ class MapAndRoutesActivity : AppCompatActivity() {
         btnShowH3    = findViewById(R.id.btnShowH3)
         btnClearH3   = findViewById(R.id.btnClearH3)
         btnShowPoi   = findViewById(R.id.btnShowPoi)
+        switchSafetyOverlay = findViewById(R.id.switchSafetyOverlay)
 
         setupAutocomplete()
         setupUserLocationFigure()
@@ -353,6 +367,19 @@ class MapAndRoutesActivity : AppCompatActivity() {
             tvHint.text = "Hexagons and POIs cleared."
         }
 
+        // --- Safety overlay toggle (independent of route planning and the sliders) ---
+        switchSafetyOverlay.setOnCheckedChangeListener { _, isChecked ->
+            val style = mapStyle ?: run { tvHint.text = "Map not ready yet."; return@setOnCheckedChangeListener }
+            ensureCrimeSafetyLayer(style)
+            val vis = visibility(if (isChecked) Property.VISIBLE else Property.NONE)
+            style.getLayerAs<FillLayer>(crimeLayerId)?.setProperties(vis)
+            style.getLayerAs<SymbolLayer>(crimeLabelLayerId)?.setProperties(vis)
+            tvHint.text = if (isChecked)
+                "Safety overlay on: green = safest, red = highest crime risk (Tel Aviv only)."
+            else
+                "Safety overlay off."
+        }
+
         // --- POI button listener ---
         btnShowPoi.setOnClickListener {
             val style = mapStyle ?: run { tvHint.text = "Map not ready yet."; return@setOnClickListener }
@@ -383,6 +410,7 @@ class MapAndRoutesActivity : AppCompatActivity() {
                 ensureH3Layers(style)
                 ensurePoiLayer(style)
                 ensureBleLayer(style)
+                ensureCrimeSafetyLayer(style)
 
                 map.cameraPosition = CameraPosition.Builder()
                     .target(LatLng(32.0853, 34.7818))
@@ -573,6 +601,143 @@ class MapAndRoutesActivity : AppCompatActivity() {
                 )
             )
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Safety overlay helpers (Tel Aviv crime risk, toggle-controlled)
+    //
+    // This is a read-only, static map layer built from official Israel Police
+    // crime statistics (see raw_data/crime_tel_aviv/). It only colors Tel Aviv
+    // neighborhoods on the map and is switched on/off by switchSafetyOverlay.
+    // It does not read the parks/residential/busy/distance sliders and does
+    // not feed into OfflineRouter's route scoring in any way.
+    // -----------------------------------------------------------------------
+
+    private fun ensureCrimeSafetyLayer(style: Style) {
+        if (style.getSource(crimeSourceId) == null) {
+            val geoJson = try {
+                assets.open("crime/crime_tel_aviv.geojson").bufferedReader().use { it.readText() }
+            } catch (t: Throwable) {
+                null
+            }
+            if (geoJson != null) {
+                style.addSource(GeoJsonSource(crimeSourceId, geoJson))
+            }
+        }
+
+        if (style.getSource(crimeSourceId) != null && style.getLayer(crimeLayerId) == null) {
+            // Inserted below the street/place name labels (rather than appended on top,
+            // which is the default) so the semi-transparent risk color never washes out
+            // map text - street and area names stay readable regardless of overlay color.
+            val addBelowLabels: (org.maplibre.android.style.layers.Layer) -> Unit = { layer ->
+                if (style.getLayer("street-labels") != null) {
+                    style.addLayerBelow(layer, "street-labels")
+                } else {
+                    style.addLayer(layer)
+                }
+            }
+            addBelowLabels(
+                FillLayer(crimeLayerId, crimeSourceId).withProperties(
+                    fillColor(
+                        step(
+                            get("risk_level"),
+                            color(Color.parseColor("#4CAF50")),          // 1 = green (safest)
+                            stop(2, color(Color.parseColor("#FFEB3B"))), // 2 = yellow
+                            stop(3, color(Color.parseColor("#FF9800"))), // 3 = orange
+                            stop(4, color(Color.parseColor("#F44336")))  // 4 = red (worst)
+                        )
+                    ),
+                    fillOpacity(0.35f),
+                    fillOutlineColor(Color.parseColor("#33000000")),
+                    visibility(Property.NONE)
+                )
+            )
+        }
+
+        // One warning-triangle marker per area, centered on it, reading "R1".."R4".
+        for (level in 1..4) {
+            val iconId = crimeRiskIconId(level)
+            if (style.getImage(iconId) == null) {
+                style.addImage(iconId, buildRiskTriangleBitmap(level))
+            }
+        }
+
+        if (style.getSource(crimeLabelSourceId) == null) {
+            val labelJson = try {
+                assets.open("crime/crime_tel_aviv_labels.geojson").bufferedReader().use { it.readText() }
+            } catch (t: Throwable) {
+                null
+            }
+            if (labelJson != null) {
+                style.addSource(GeoJsonSource(crimeLabelSourceId, labelJson))
+            }
+        }
+
+        if (style.getSource(crimeLabelSourceId) != null && style.getLayer(crimeLabelLayerId) == null) {
+            style.addLayer(
+                SymbolLayer(crimeLabelLayerId, crimeLabelSourceId).withProperties(
+                    iconImage(
+                        step(
+                            get("risk_level"),
+                            literal(crimeRiskIconId(1)),
+                            stop(2, literal(crimeRiskIconId(2))),
+                            stop(3, literal(crimeRiskIconId(3))),
+                            stop(4, literal(crimeRiskIconId(4)))
+                        )
+                    ),
+                    iconSize(0.9f),
+                    iconAllowOverlap(literal(true)),
+                    iconIgnorePlacement(literal(true)),
+                    visibility(Property.NONE)
+                )
+            )
+        }
+    }
+
+    /**
+     * Yellow warning triangle with a black outline and a bold "R<level>" headline
+     * centered inside it - drawn directly on a Canvas so no drawable asset is needed.
+     */
+    private fun buildRiskTriangleBitmap(riskLevel: Int): Bitmap {
+        val size = dp(56f).toInt().coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = AndroidCanvas(bitmap)
+
+        val strokeWidth = dp(3f)
+        val inset = strokeWidth
+        val path = Path().apply {
+            moveTo(size / 2f, inset)
+            lineTo(size - inset, size - inset)
+            lineTo(inset, size - inset)
+            close()
+        }
+
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#FFD600")
+        }
+        canvas.drawPath(path, fillPaint)
+
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            this.strokeWidth = strokeWidth
+            strokeJoin = Paint.Join.ROUND
+            color = Color.BLACK
+        }
+        canvas.drawPath(path, strokePaint)
+
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.BLACK
+            textAlign = Paint.Align.CENTER
+            textSize = dp(15f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val text = "R$riskLevel"
+        val textY = size * 0.68f - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText(text, size / 2f, textY, textPaint)
+
+        return bitmap
     }
 
     /**

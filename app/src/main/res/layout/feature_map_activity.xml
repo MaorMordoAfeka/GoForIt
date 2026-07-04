@@ -267,6 +267,31 @@
                 app:trackColorInactive="@color/soft_mint"
                 app:trackHeight="6dp" />
 
+            <!--   Safety overlay toggle — independent of the sliders above.
+                     Colors Tel Aviv neighborhoods on the map by relative crime risk
+                     (green = safest .. red = worst). Does not affect route planning.   -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Safety overlay (Tel Aviv crime data)"
+                    android:textColor="@color/text_purple_dark" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/switchSafetyOverlay"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:thumbTint="@color/brand_purple"
+                    app:trackTint="@color/soft_lavender" />
+            </LinearLayout>
+
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnPlan"
                 android:layout_width="match_parent"
