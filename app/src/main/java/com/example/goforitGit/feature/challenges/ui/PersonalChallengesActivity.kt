@@ -13,9 +13,12 @@ import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.widget.TextViewCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
+import com.example.goforitGit.core.data.StepsData.StepBus
 import com.example.goforitGit.databinding.FeaturePersonalChallengesActivityBinding
 import com.example.goforitGit.feature.challenges.model.ActiveChallenge
 import com.example.goforitGit.feature.challenges.model.ChallengeDifficulty
@@ -25,17 +28,20 @@ import com.example.goforitGit.feature.challenges.model.ChallengeType
 import com.example.goforitGit.feature.challenges.model.DifficultyTier
 import com.example.goforitGit.feature.challenges.model.PersonalChallengesState
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.util.Locale
 
 /**
  * Personal Challenges screen.
  *
- * The screen is a thin, server-authoritative view: it only ever DISPLAYS values
- * returned by the Cloud Functions (targets, baseline, progress, rewards,
- * completion). It never recomputes any of them locally, and it never writes
- * progress or rewards. Acceptance is the only mutating action, and it is
- * validated and frozen entirely on the server.
+ * Cloud Functions remain authoritative for challenge targets, rewards,
+ * completion, points, and leaderboard updates. While this screen is visible,
+ * it overlays a local, display-only preview from StepBus so the progress bar
+ * responds immediately without sending frequent Firebase requests.
+ *
+ * Local preview steps are shown as pending verification. They never grant
+ * rewards or change persisted challenge state on the Android client.
  */
 class PersonalChallengesActivity : AppCompatActivity() {
 
@@ -53,7 +59,29 @@ class PersonalChallengesActivity : AppCompatActivity() {
     /** Difficulty selected for Raise Your Baseline, if any. */
     private var selectedTier: DifficultyTier? = null
 
+    /**
+     * StepBus publishes the app's persisted cumulative valid-step total.
+     * It is observed only for immediate UI preview; it never triggers a network call.
+     */
+    private var observedLocalStepTotal: Int = 0
+
+    /**
+     * The last server timestamp lets window checks use a server-aligned clock even
+     * when the device clock is slightly inaccurate.
+     */
+    private var serverClockOffsetMs: Long = 0L
+
+    /** Schedules the local Study-Break preview anchor when its window begins. */
+    private var studyWindowAnchorRunnable: Runnable? = null
+
+    private val previewPrefs by lazy {
+        getSharedPreferences(PREVIEW_PREFS_NAME, MODE_PRIVATE)
+    }
+
     companion object {
+        private const val PREVIEW_PREFS_NAME = "personal_challenge_preview"
+        private const val NO_STEP_ANCHOR = Int.MIN_VALUE
+
         /** Display-only cache of the last successfully loaded state. */
         private var cachedState: PersonalChallengesState? = null
 
@@ -118,6 +146,8 @@ class PersonalChallengesActivity : AppCompatActivity() {
             )
         }
 
+        observedLocalStepTotal = StepBus.steps.value
+        observeLocalSteps()
         loadInitial()
     }
 
@@ -130,6 +160,7 @@ class PersonalChallengesActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         stopCountdown()
+        stopStudyWindowAnchor()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -175,6 +206,7 @@ class PersonalChallengesActivity : AppCompatActivity() {
             requestInFlight = false
             result
                 .onSuccess { state ->
+                    serverClockOffsetMs = state.serverNowMs - System.currentTimeMillis()
                     cachedState = state
                     currentState = state
                     renderState(state, stale = false)
@@ -222,6 +254,7 @@ class PersonalChallengesActivity : AppCompatActivity() {
 
         val active = state.active
         if (active != null) {
+            ensureLocalPreviewAnchor(active)
             renderActive(active)
             renderOffersWhenChosen(active)
         } else {
@@ -284,27 +317,42 @@ class PersonalChallengesActivity : AppCompatActivity() {
     private fun renderProgressBody(active: ActiveChallenge) {
         when (active.type) {
             ChallengeType.RAISE_BASELINE -> {
+                val preview = previewProgress(active)
                 binding.activeProgressBox.visibility = View.VISIBLE
-                binding.tvActiveProgress.text = getString(
-                    R.string.pc_progress_baseline,
-                    formatCount(active.progressSteps),
-                    formatCount(active.targetSteps)
+                binding.tvActiveProgress.text = withPendingVerification(
+                    base = getString(
+                        R.string.pc_progress_baseline,
+                        formatCount(preview.displayedSteps),
+                        formatCount(active.targetSteps)
+                    ),
+                    pendingSteps = preview.pendingSteps,
+                    targetReachedLocally = preview.displayedSteps >= active.targetSteps
                 )
-                setProgress(binding.pbActive, active.progressSteps, active.targetSteps)
+                setProgress(binding.pbActive, preview.displayedSteps, active.targetSteps)
             }
 
             ChallengeType.STUDY_BREAK_BOOST -> {
+                val preview = previewProgress(active)
                 binding.activeProgressBox.visibility = View.VISIBLE
-                binding.tvActiveProgress.text = getString(
-                    R.string.pc_progress_study,
-                    formatCount(active.progressSteps),
-                    formatCount(active.targetSteps),
-                    active.selectedIntervalLabel ?: ""
+                binding.tvActiveProgress.text = withPendingVerification(
+                    base = getString(
+                        R.string.pc_progress_study,
+                        formatCount(preview.displayedSteps),
+                        formatCount(active.targetSteps),
+                        active.selectedIntervalLabel ?: ""
+                    ),
+                    pendingSteps = preview.pendingSteps,
+                    targetReachedLocally = preview.displayedSteps >= active.targetSteps
                 )
-                setProgress(binding.pbActive, active.progressSteps, active.targetSteps)
+                setProgress(binding.pbActive, preview.displayedSteps, active.targetSteps)
             }
 
             ChallengeType.CAMPUS_EXPLORER -> {
+                /*
+                 * StepBus contains all valid local steps, not verified campus-only
+                 * steps. Keep Campus Explorer server-confirmed until the existing
+                 * campus/geofence component exposes a separate qualified-step flow.
+                 */
                 binding.campusProgressBox.visibility = View.VISIBLE
                 binding.tvCampusSteps.text = getString(
                     R.string.pc_progress_campus_steps,
@@ -313,15 +361,199 @@ class PersonalChallengesActivity : AppCompatActivity() {
                 )
                 setProgress(binding.pbCampusSteps, active.progressSteps, active.targetSteps)
 
-                // Steps requirement check icon
                 val stepsDone = active.progressSteps >= active.targetSteps
                 TextViewCompat.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                    binding.tvCampusSteps, 0, 0,
-                    if (stepsDone) R.drawable.ic_check_circle else 0, 0
+                    binding.tvCampusSteps,
+                    0,
+                    0,
+                    if (stepsDone) R.drawable.ic_check_circle else 0,
+                    0
                 )
             }
         }
     }
+
+    private data class LocalProgressPreview(
+        val displayedSteps: Int,
+        val pendingSteps: Int,
+    )
+
+    /**
+     * Combines canonical server progress with a local StepBus preview.
+     *
+     * We use max(server, local), never addition: the local total already contains
+     * steps that may later be included by a periodic server sync.
+     */
+    private fun previewProgress(active: ActiveChallenge): LocalProgressPreview {
+        val serverProgress = active.progressSteps.coerceAtLeast(0)
+        if (active.status != ChallengeStatus.ACTIVE) {
+            return LocalProgressPreview(serverProgress, 0)
+        }
+
+        val localProgress = when (active.type) {
+            ChallengeType.RAISE_BASELINE ->
+                localStepsSinceAnchor(acceptedAnchorKey(active))
+
+            ChallengeType.STUDY_BREAK_BOOST ->
+                localStudyBreakSteps(active)
+
+            ChallengeType.CAMPUS_EXPLORER -> null
+        }
+
+        val displayed = maxOf(serverProgress, localProgress ?: serverProgress)
+            .coerceAtMost(active.targetSteps.coerceAtLeast(0))
+
+        return LocalProgressPreview(
+            displayedSteps = displayed,
+            pendingSteps = (displayed - serverProgress).coerceAtLeast(0)
+        )
+    }
+
+    private fun withPendingVerification(
+        base: String,
+        pendingSteps: Int,
+        targetReachedLocally: Boolean,
+    ): String {
+        if (pendingSteps <= 0) return base
+
+        val pending = if (pendingSteps == 1) {
+            "+1 locally counted step awaiting verification."
+        } else {
+            "+${formatCount(pendingSteps)} locally counted steps awaiting verification."
+        }
+
+        return if (targetReachedLocally) {
+            "$base\n$pending\nTarget reached — waiting for server verification."
+        } else {
+            "$base\n$pending"
+        }
+    }
+
+    private fun observeLocalSteps() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                StepBus.steps.collectLatest { totalSteps ->
+                    observedLocalStepTotal = totalSteps.coerceAtLeast(0)
+
+                    val active = currentState?.active
+                    if (active?.status == ChallengeStatus.ACTIVE) {
+                        ensureLocalPreviewAnchor(active)
+                        renderProgressBody(active)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun ensureLocalPreviewAnchor(active: ActiveChallenge) {
+        if (active.status != ChallengeStatus.ACTIVE) return
+
+        when (active.type) {
+            ChallengeType.RAISE_BASELINE -> ensureAnchor(acceptedAnchorKey(active))
+            ChallengeType.STUDY_BREAK_BOOST -> ensureStudyWindowAnchor(active)
+            ChallengeType.CAMPUS_EXPLORER -> Unit
+        }
+    }
+
+    /**
+     * Called after the server confirms a newly accepted challenge. It establishes
+     * the client-side baseline without writing any progress to Firebase.
+     */
+    private fun resetLocalPreviewAnchor(active: ActiveChallenge) {
+        clearAnchor(acceptedAnchorKey(active))
+        clearAnchor(studyWindowAnchorKey(active))
+        stopStudyWindowAnchor()
+
+        when (active.type) {
+            ChallengeType.RAISE_BASELINE -> saveAnchor(acceptedAnchorKey(active))
+            ChallengeType.STUDY_BREAK_BOOST -> ensureStudyWindowAnchor(active)
+            ChallengeType.CAMPUS_EXPLORER -> Unit
+        }
+    }
+
+    private fun localStepsSinceAnchor(key: String): Int? {
+        val anchor = previewPrefs.getInt(key, NO_STEP_ANCHOR)
+        if (anchor == NO_STEP_ANCHOR) return null
+        return (observedLocalStepTotal - anchor).coerceAtLeast(0)
+    }
+
+    /**
+     * Counts only local steps after the Study-Break window starts (or after
+     * acceptance if the challenge was accepted during that window).
+     */
+    private fun localStudyBreakSteps(active: ActiveChallenge): Int? {
+        val now = challengeNowMs()
+        if (active.windowStartMs <= 0L || active.windowEndMs <= active.windowStartMs) {
+            return null
+        }
+        if (now < active.windowStartMs || now >= active.windowEndMs) {
+            return null
+        }
+        return localStepsSinceAnchor(studyWindowAnchorKey(active))
+    }
+
+    private fun ensureStudyWindowAnchor(active: ActiveChallenge) {
+        val startMs = active.windowStartMs
+        val endMs = active.windowEndMs
+        if (startMs <= 0L || endMs <= startMs) return
+
+        val now = challengeNowMs()
+        val key = studyWindowAnchorKey(active)
+
+        when {
+            now >= endMs -> {
+                stopStudyWindowAnchor()
+            }
+
+            now >= startMs -> {
+                stopStudyWindowAnchor()
+                ensureAnchor(key)
+            }
+
+            // A single runnable is enough. Do not cancel and recreate it on every step.
+            studyWindowAnchorRunnable != null -> Unit
+
+            else -> {
+                val delayMs = (startMs - now).coerceAtLeast(0L)
+                studyWindowAnchorRunnable = Runnable {
+                    saveAnchor(key)
+                    studyWindowAnchorRunnable = null
+                    currentState?.active
+                        ?.takeIf { it.type == ChallengeType.STUDY_BREAK_BOOST }
+                        ?.let(::renderProgressBody)
+                }
+                handler.postDelayed(studyWindowAnchorRunnable!!, delayMs)
+            }
+        }
+    }
+
+    private fun stopStudyWindowAnchor() {
+        studyWindowAnchorRunnable?.let(handler::removeCallbacks)
+        studyWindowAnchorRunnable = null
+    }
+
+    private fun ensureAnchor(key: String) {
+        if (previewPrefs.getInt(key, NO_STEP_ANCHOR) == NO_STEP_ANCHOR) {
+            saveAnchor(key)
+        }
+    }
+
+    private fun saveAnchor(key: String) {
+        previewPrefs.edit().putInt(key, observedLocalStepTotal).apply()
+    }
+
+    private fun clearAnchor(key: String) {
+        previewPrefs.edit().remove(key).apply()
+    }
+
+    private fun acceptedAnchorKey(active: ActiveChallenge): String =
+        "accepted_${currentState?.dayKey.orEmpty()}_${active.type.wire}"
+
+    private fun studyWindowAnchorKey(active: ActiveChallenge): String =
+        "study_window_${currentState?.dayKey.orEmpty()}_${active.type.wire}"
+
+    private fun challengeNowMs(): Long =
+        System.currentTimeMillis() + serverClockOffsetMs
 
     // -------------------------------------------------------------------------
     // Offers (no challenge chosen yet)
@@ -552,8 +784,10 @@ class PersonalChallengesActivity : AppCompatActivity() {
             requestInFlight = false
             result
                 .onSuccess { state ->
+                    serverClockOffsetMs = state.serverNowMs - System.currentTimeMillis()
                     cachedState = state
                     currentState = state
+                    state.active?.let(::resetLocalPreviewAnchor)
                     renderState(state, stale = false)
                 }
                 .onFailure { err ->
