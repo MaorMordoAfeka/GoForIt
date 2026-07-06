@@ -1177,6 +1177,14 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
     logger.error(`uploadStepInterval: leaderboard recalculation failed for ${dayKey}`, err);
   }
 
+  // Raise Your Baseline and Study-Break Boost depend on normal step uploads,
+  // not only campus-geofence syncing.
+  try {
+    await evaluatePersonalChallenge(uid, dayKey);
+  } catch (err) {
+    logger.error(`uploadStepInterval: personal-challenge evaluation failed for ${dayKey}`, err);
+  }
+
   return { ok: true, leaderboardRecalculated };
 });
 
@@ -1425,6 +1433,33 @@ function pcCampusStepsFromDaily(daily: Record<string, unknown> | undefined): num
 }
 
 /**
+ * Returns the user's canonical valid step total for one day.
+ * Includes valid steps both inside and outside the campus perimeter.
+ */
+function pcTotalValidStepsFromDaily(daily: Record<string, unknown> | undefined): number {
+  return clampSix(daily?.stepsByInterval).reduce((sum, steps) => sum + steps, 0);
+}
+
+type PcStepScope = "all_valid_steps" | "campus_qualified_steps";
+
+function pcStepScopeFromChallenge(challenge: Record<string, unknown>): PcStepScope {
+  // Older active challenges did not store a scope.
+  // Keep them campus-only so their measurement rule does not change mid-day.
+  return challenge.stepScope === "all_valid_steps"
+    ? "all_valid_steps"
+    : "campus_qualified_steps";
+}
+
+function pcStepsForScope(
+  daily: Record<string, unknown> | undefined,
+  scope: PcStepScope
+): number {
+  return scope === "all_valid_steps"
+    ? pcTotalValidStepsFromDaily(daily)
+    : pcCampusStepsFromDaily(daily);
+}
+
+/**
  * Average of verified campus steps over the last N completed days (excluding
  * today). A day is "usable" when it has a positive campus-qualified step count.
  * Returns null when there are fewer than the required number of usable days.
@@ -1445,7 +1480,7 @@ async function pcComputeBaseline(
   const usable: number[] = [];
   for (const snap of snaps) {
     if (!snap.exists) continue;
-    const steps = pcCampusStepsFromDaily(snap.data());
+    const steps = pcTotalValidStepsFromDaily(snap.data());
     if (steps > 0) usable.push(steps);
   }
 
@@ -1684,6 +1719,10 @@ async function evaluatePersonalChallenge(uid: string, dayKey: string): Promise<v
     const tz = typeof c.timezone === "string" ? c.timezone : DEFAULT_TZ;
     const daily = dSnap.data() ?? {};
     const currentCampusSteps = pcCampusStepsFromDaily(daily);
+
+    const stepScope = pcStepScopeFromChallenge(c);
+    const currentScopedSteps = pcStepsForScope(daily, stepScope);
+
     const stepsAtAcceptance = Number.isInteger(c.stepsAtAcceptance)
       ? (c.stepsAtAcceptance as number)
       : 0;
@@ -1698,42 +1737,60 @@ async function evaluatePersonalChallenge(uid: string, dayKey: string): Promise<v
 
     if (c.challengeType === "raise_baseline") {
       const target = Number.isInteger(c.targetSteps) ? (c.targetSteps as number) : 0;
-      const progress = Math.max(0, currentCampusSteps - stepsAtAcceptance);
+      const progress = Math.max(0, currentScopedSteps - stepsAtAcceptance);
       patch.progressSteps = Math.min(progress, target);
       requirementsMet = target > 0 && progress >= target;
     } else if (c.challengeType === "study_break_boost") {
-      const idx = Number.isInteger(c.selectedIntervalIndex)
-        ? (c.selectedIntervalIndex as number)
-        : 0;
-      const winStart = intervalStart(dayKey, idx, tz);
-      const winEnd = winStart.plus({ hours: 4 });
-      const insideWindow = nowDt >= winStart && nowDt < winEnd;
+        const idx = Number.isInteger(c.selectedIntervalIndex)
+          ? (c.selectedIntervalIndex as number)
+          : 0;
 
-      let windowStart = Number.isInteger(c.studyBreakWindowStartSteps)
-        ? (c.studyBreakWindowStartSteps as number)
-        : null;
+        const winStart = intervalStart(dayKey, idx, tz);
+        const winEnd = winStart.plus({ hours: 4 });
+        const intervalSteps = clampSix(daily.stepsByInterval)[idx];
 
-      if (windowStart == null && insideWindow) {
-        // First trusted observation inside the personal window after acceptance.
-        windowStart = currentCampusSteps;
-        patch.studyBreakWindowStartSteps = windowStart;
-      }
+        let progress: number;
 
-      let progress = Number.isInteger(c.progressSteps) ? (c.progressSteps as number) : 0;
-      if (windowStart != null && insideWindow) {
-        progress = Math.max(0, currentCampusSteps - windowStart);
-        patch.progressSteps = Math.min(progress, PC_STUDY_BREAK_TARGET_STEPS);
-      }
+        if (stepScope === "all_valid_steps") {
+          // New challenges save the interval's current total at acceptance.
+          // Only steps added afterwards inside this interval count.
+          const intervalStepsAtAcceptance = Number.isInteger(c.intervalStepsAtAcceptance)
+            ? (c.intervalStepsAtAcceptance as number)
+            : intervalSteps;
 
-      requirementsMet = progress >= PC_STUDY_BREAK_TARGET_STEPS;
+          progress = nowDt < winStart
+            ? 0
+            : Math.max(0, intervalSteps - intervalStepsAtAcceptance);
 
-      // If the window has closed without completion, expire the challenge so the
-      // slot for today is consumed and the UI can explain what happened.
-      if (!requirementsMet && nowDt >= winEnd) {
-        patch.status = "expired";
-        tx.set(challengeRef, patch, { merge: true });
-        return;
-      }
+          patch.progressSteps = Math.min(progress, PC_STUDY_BREAK_TARGET_STEPS);
+        } else {
+          // Preserve the old campus-only behavior for challenges created before this update.
+          const insideWindow = nowDt >= winStart && nowDt < winEnd;
+
+          let windowStart = Number.isInteger(c.studyBreakWindowStartSteps)
+            ? (c.studyBreakWindowStartSteps as number)
+            : null;
+
+          if (windowStart == null && insideWindow) {
+            windowStart = currentCampusSteps;
+            patch.studyBreakWindowStartSteps = windowStart;
+          }
+
+          progress = Number.isInteger(c.progressSteps) ? (c.progressSteps as number) : 0;
+
+          if (windowStart != null && insideWindow) {
+            progress = Math.max(0, currentCampusSteps - windowStart);
+            patch.progressSteps = Math.min(progress, PC_STUDY_BREAK_TARGET_STEPS);
+          }
+        }
+
+        requirementsMet = progress >= PC_STUDY_BREAK_TARGET_STEPS;
+
+        if (!requirementsMet && nowDt >= winEnd) {
+          patch.status = "expired";
+          tx.set(challengeRef, patch, { merge: true });
+          return;
+        }
     } else if (c.challengeType === "campus_explorer") {
       const progress = Math.max(0, currentCampusSteps - stepsAtAcceptance);
       patch.progressSteps = Math.min(progress, PC_CAMPUS_TARGET_STEPS);
@@ -1901,6 +1958,12 @@ export const acceptPersonalChallenge = onCall({ region: FUNCTIONS_REGION }, asyn
     rewardPoints: 0,
     selectedIntervalIndex: null,
     selectedIntervalLabel: null,
+    stepScope:
+      challengeType === "campus_explorer"
+        ? "campus_qualified_steps"
+        : "all_valid_steps",
+
+    intervalStepsAtAcceptance: null,
     challengeRewardGranted: false,
   };
 
@@ -1949,7 +2012,17 @@ export const acceptPersonalChallenge = onCall({ region: FUNCTIONS_REGION }, asyn
       }
     }
 
-    frozen.stepsAtAcceptance = pcCampusStepsFromDaily(dailySnap.data());
+    const dailyAtAcceptance = dailySnap.data();
+    const frozenScope = frozen.stepScope as PcStepScope;
+
+    frozen.stepsAtAcceptance = pcStepsForScope(dailyAtAcceptance, frozenScope);
+
+    if (challengeType === "study_break_boost") {
+      const selectedIntervalIndex = frozen.selectedIntervalIndex as number;
+
+      frozen.intervalStepsAtAcceptance =
+        clampSix(dailyAtAcceptance?.stepsByInterval)[selectedIntervalIndex];
+    }
     frozen.acceptedAt = admin.firestore.FieldValue.serverTimestamp();
     frozen.createdAt = admin.firestore.FieldValue.serverTimestamp();
     frozen.updatedAt = admin.firestore.FieldValue.serverTimestamp();
