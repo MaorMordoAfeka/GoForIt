@@ -1,5 +1,6 @@
 package com.example.goforitGit.feature.challenges.ui
 
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -19,6 +20,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.core.data.StepsData.StepBus
+import com.example.goforitGit.core.data.StepsData.StepRepository
 import com.example.goforitGit.databinding.FeaturePersonalChallengesActivityBinding
 import com.example.goforitGit.feature.challenges.model.ActiveChallenge
 import com.example.goforitGit.feature.challenges.model.ChallengeDifficulty
@@ -78,6 +80,10 @@ class PersonalChallengesActivity : AppCompatActivity() {
         getSharedPreferences(PREVIEW_PREFS_NAME, MODE_PRIVATE)
     }
 
+    private val stepRepository by lazy {
+        StepRepository.get(application as Application)
+    }
+
     companion object {
         private const val PREVIEW_PREFS_NAME = "personal_challenge_preview"
         private const val NO_STEP_ANCHOR = Int.MIN_VALUE
@@ -115,7 +121,10 @@ class PersonalChallengesActivity : AppCompatActivity() {
                 type = ChallengeType.RAISE_BASELINE,
                 difficulty = tier.difficulty,
                 title = getString(R.string.pc_baseline_title),
-                target = getString(R.string.pc_baseline_target_value, formatCount(tier.targetSteps)),
+                target = getString(
+                    R.string.pc_baseline_target_value,
+                    formatCount(tier.targetSteps)
+                ),
                 reward = tier.reward,
             )
         }
@@ -146,7 +155,10 @@ class PersonalChallengesActivity : AppCompatActivity() {
             )
         }
 
-        observedLocalStepTotal = StepBus.steps.value
+        // Forces the existing repository to preload persisted steps into StepBus.
+        // No StepCounterZC change and no Firebase request are involved.
+        stepRepository
+        observedLocalStepTotal = StepBus.steps.value.coerceAtLeast(0)
         observeLocalSteps()
         loadInitial()
     }
@@ -277,7 +289,10 @@ class PersonalChallengesActivity : AppCompatActivity() {
 
         // Status pill
         val (statusText, statusColor) = when (active.status) {
-            ChallengeStatus.COMPLETED -> getString(R.string.pc_status_completed) to Color.parseColor("#4FB36A")
+            ChallengeStatus.COMPLETED -> getString(R.string.pc_status_completed) to Color.parseColor(
+                "#4FB36A"
+            )
+
             ChallengeStatus.EXPIRED -> getString(R.string.pc_status_expired) to Color.parseColor("#7B8197")
             else -> getString(R.string.pc_status_active) to Color.parseColor("#4FB36A")
         }
@@ -539,7 +554,14 @@ class PersonalChallengesActivity : AppCompatActivity() {
     }
 
     private fun saveAnchor(key: String) {
-        previewPrefs.edit().putInt(key, observedLocalStepTotal).apply()
+        val latestTotal = StepBus.steps.value.coerceAtLeast(0)
+
+        // Keep the observer and saved snapshot aligned.
+        observedLocalStepTotal = latestTotal
+
+        previewPrefs.edit()
+            .putInt(key, latestTotal)
+            .apply()
     }
 
     private fun clearAnchor(key: String) {
@@ -547,10 +569,10 @@ class PersonalChallengesActivity : AppCompatActivity() {
     }
 
     private fun acceptedAnchorKey(active: ActiveChallenge): String =
-        "accepted_${currentState?.dayKey.orEmpty()}_${active.type.wire}"
+        "accepted_v2_${currentState?.dayKey.orEmpty()}_${active.type.wire}_${active.acceptedAtMs}"
 
     private fun studyWindowAnchorKey(active: ActiveChallenge): String =
-        "study_window_${currentState?.dayKey.orEmpty()}_${active.type.wire}"
+        "study_window_v2_${currentState?.dayKey.orEmpty()}_${active.type.wire}_${active.acceptedAtMs}"
 
     private fun challengeNowMs(): Long =
         System.currentTimeMillis() + serverClockOffsetMs
@@ -598,7 +620,8 @@ class PersonalChallengesActivity : AppCompatActivity() {
         // ---- Study-Break Boost ----
         val sb = offers.studyBreak
         binding.tvStudyWindow.text = getString(
-            R.string.pc_study_window, sb.selectedIntervalLabel ?: getString(R.string.pc_unknown_window)
+            R.string.pc_study_window,
+            sb.selectedIntervalLabel ?: getString(R.string.pc_unknown_window)
         )
         binding.tvStudyGoal.text =
             getString(R.string.pc_study_goal, formatCount(sb.goalSteps))
@@ -714,11 +737,13 @@ class PersonalChallengesActivity : AppCompatActivity() {
                 binding.tvBaselineUnavailable.visibility = View.VISIBLE
                 binding.tvBaselineUnavailable.text = getString(R.string.pc_already_selected)
             }
+
             ChallengeType.STUDY_BREAK_BOOST -> {
                 binding.btnStartStudy.isEnabled = false
                 binding.tvStudyUnavailable.visibility = View.VISIBLE
                 binding.tvStudyUnavailable.text = getString(R.string.pc_already_selected)
             }
+
             ChallengeType.CAMPUS_EXPLORER -> {
                 binding.btnStartCampus.isEnabled = false
                 binding.tvCampusUnavailable.visibility = View.VISIBLE
