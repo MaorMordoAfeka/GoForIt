@@ -30,6 +30,47 @@ const ALL_INTERVALS = [0, 1, 2, 3, 4, 5] as const;
 // campus time more rewarding (e.g. 50 -> ~3x), raise it to make it gentler.
 const COLLEGE_AREA_STEPS_PER_BONUS_POINT = 100;
 
+// Personal Challenges — server-authoritative configuration
+//
+// All targets, percentages and rewards live ONLY on the server. The Android
+// client never computes or trusts these values; it renders what the server
+// returns. Progress is always derived from trusted server data:
+//   - valid campus steps  -> users/{uid}/daily/{dayKey}.collegeAreaQualifiedSteps
+//   - verified BLE visit  -> users/{uid}/bonus_visits/{dayKey}
+// -----------------------------------------------------------------------------
+
+const PC_CHALLENGE_TYPES = ["raise_baseline", "study_break_boost", "campus_explorer"] as const;
+type PcChallengeType = (typeof PC_CHALLENGE_TYPES)[number];
+
+const PC_DIFFICULTIES = ["easy", "medium", "hard"] as const;
+type PcDifficulty = (typeof PC_DIFFICULTIES)[number];
+
+// Raise Your Baseline: percentage above the 7-day baseline. Reward scales with
+// difficulty (Easy 200, Medium 225, Hard 250); the percentage sets how far above
+// baseline the target sits.
+const PC_BASELINE_TIERS: Record<PcDifficulty, { percent: number; reward: number }> = {
+  easy: { percent: 0.1, reward: 200 },
+  medium: { percent: 0.2, reward: 225 },
+  hard: { percent: 0.3, reward: 250 },
+};
+
+// Baseline needs at least this many usable past days of verified campus activity.
+const PC_BASELINE_MIN_DAYS = 3;
+const PC_BASELINE_LOOKBACK_DAYS = 7;
+
+// Study-Break Boost.
+const PC_STUDY_BREAK_TARGET_STEPS = 800;
+const PC_STUDY_BREAK_REWARD = 200;
+const PC_STUDY_BREAK_MIN_DAYS = 3;
+const PC_STUDY_BREAK_LOOKBACK_DAYS = 7;
+
+// Campus Explorer.
+const PC_CAMPUS_TARGET_STEPS = 1200;
+const PC_CAMPUS_STATION_GOAL = 1;
+const PC_CAMPUS_REWARD = 200;
+
+// -----------------------------------------------------------------------------
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -1136,6 +1177,14 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
     logger.error(`uploadStepInterval: leaderboard recalculation failed for ${dayKey}`, err);
   }
 
+  // Raise Your Baseline and Study-Break Boost depend on normal step uploads,
+  // not only campus-geofence syncing.
+  try {
+    await evaluatePersonalChallenge(uid, dayKey);
+  } catch (err) {
+    logger.error(`uploadStepInterval: personal-challenge evaluation failed for ${dayKey}`, err);
+  }
+
   return { ok: true, leaderboardRecalculated };
 });
 
@@ -1238,6 +1287,13 @@ export const recordBonusVisit = onCall({ region: FUNCTIONS_REGION }, async (requ
     }
   }
 
+
+  // A verified station visit may satisfy an active Campus Explorer challenge.
+  try {
+    await evaluatePersonalChallenge(uid, dayKey);
+  } catch (err) {
+    logger.error(`recordBonusVisit: personal-challenge evaluation failed for ${dayKey}`, err);
+  }
   return { ok: awarded, dayKey, awardedPoints: awarded ? pointsValue : 0 };
 });
 
@@ -1334,6 +1390,14 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
     }
   }
 
+
+  // Progress any active personal challenge from the freshly-updated campus steps.
+  try {
+    await evaluatePersonalChallenge(uid, dayKey);
+  } catch (err) {
+    logger.error(`syncCollegeAreaSteps: personal-challenge evaluation failed for ${dayKey}`, err);
+  }
+
   return {
     ok: true,
     dayKey,
@@ -1341,6 +1405,648 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
     appliedDelta,
     awardedPoints: awardedBonusPoints,
     leaderboardRecalculated,
+  };
+});
+
+// -----------------------------------------------------------------------------
+// Personal Challenges — helpers
+// -----------------------------------------------------------------------------
+
+function pcIntervalLabel(intervalIndex: number): string {
+  const start = (intervalIndex * 4) % 24;
+  const end = start + 4;
+  const pad = (h: number) => String(h).padStart(2, "0");
+  return `${pad(start)}:00–${pad(end === 24 ? 24 : end)}:00`;
+}
+
+function pcTimestampToMillis(value: unknown): number {
+  if (value instanceof admin.firestore.Timestamp) return value.toMillis();
+  if (value && typeof (value as { toMillis?: () => number }).toMillis === "function") {
+    return (value as { toMillis: () => number }).toMillis();
+  }
+  return 0;
+}
+
+function pcCampusStepsFromDaily(daily: Record<string, unknown> | undefined): number {
+  const v = daily?.collegeAreaQualifiedSteps;
+  return Number.isInteger(v) && (v as number) >= 0 ? (v as number) : 0;
+}
+
+/**
+ * Returns the user's canonical valid step total for one day.
+ * Includes valid steps both inside and outside the campus perimeter.
+ */
+function pcTotalValidStepsFromDaily(daily: Record<string, unknown> | undefined): number {
+  return clampSix(daily?.stepsByInterval).reduce((sum, steps) => sum + steps, 0);
+}
+
+type PcStepScope = "all_valid_steps" | "campus_qualified_steps";
+
+function pcStepScopeFromChallenge(challenge: Record<string, unknown>): PcStepScope {
+  // Older active challenges did not store a scope.
+  // Keep them campus-only so their measurement rule does not change mid-day.
+  return challenge.stepScope === "all_valid_steps"
+    ? "all_valid_steps"
+    : "campus_qualified_steps";
+}
+
+function pcStepsForScope(
+  daily: Record<string, unknown> | undefined,
+  scope: PcStepScope
+): number {
+  return scope === "all_valid_steps"
+    ? pcTotalValidStepsFromDaily(daily)
+    : pcCampusStepsFromDaily(daily);
+}
+
+/**
+ * Average of verified campus steps over the last N completed days (excluding
+ * today). A day is "usable" when it has a positive campus-qualified step count.
+ * Returns null when there are fewer than the required number of usable days.
+ */
+async function pcComputeBaseline(
+  uid: string,
+  dayKey: string,
+  tz: string
+): Promise<{ baseline: number; usableDays: number } | null> {
+  const today = DateTime.fromISO(dayKey, { zone: tz });
+  const refs: admin.firestore.DocumentReference[] = [];
+  for (let i = 1; i <= PC_BASELINE_LOOKBACK_DAYS; i++) {
+    const key = toDayKey(today.minus({ days: i }));
+    refs.push(db.doc(`users/${uid}/daily/${key}`));
+  }
+
+  const snaps = await db.getAll(...refs);
+  const usable: number[] = [];
+  for (const snap of snaps) {
+    if (!snap.exists) continue;
+    const steps = pcTotalValidStepsFromDaily(snap.data());
+    if (steps > 0) usable.push(steps);
+  }
+
+  if (usable.length < PC_BASELINE_MIN_DAYS) return null;
+
+  const sum = usable.reduce((a, b) => a + b, 0);
+  return { baseline: Math.round(sum / usable.length), usableDays: usable.length };
+}
+
+/**
+ * Chooses the user's least-active 4-hour window for Study-Break Boost.
+ *
+ * Priority:
+ *  1) The learned preferredInactiveInterval, if it is outside quiet hours.
+ *  2) Otherwise the lowest-average allowed interval over the last N days,
+ *     requiring at least PC_STUDY_BREAK_MIN_DAYS usable days.
+ *
+ * Only intervals outside the user's quiet-hours window are eligible.
+ */
+async function pcComputeStudyBreakInterval(
+  uid: string,
+  profile: { preferredInactiveInterval: number | null; quietHoursStartHour: number; quietHoursEndHour: number },
+  dayKey: string,
+  tz: string
+): Promise<{ intervalIndex: number } | null> {
+  const allowed = allowedReminderIntervals(profile.quietHoursStartHour, profile.quietHoursEndHour);
+  if (allowed.length === 0) return null;
+
+  if (
+    profile.preferredInactiveInterval != null &&
+    allowed.includes(profile.preferredInactiveInterval)
+  ) {
+    return { intervalIndex: profile.preferredInactiveInterval };
+  }
+
+  const today = DateTime.fromISO(dayKey, { zone: tz });
+  const refs: admin.firestore.DocumentReference[] = [];
+  for (let i = 1; i <= PC_STUDY_BREAK_LOOKBACK_DAYS; i++) {
+    const key = toDayKey(today.minus({ days: i }));
+    refs.push(db.doc(`users/${uid}/daily/${key}`));
+  }
+
+  const snaps = await db.getAll(...refs);
+  const sums = new Array<number>(6).fill(0);
+  let usableDays = 0;
+
+  for (const snap of snaps) {
+    if (!snap.exists) continue;
+    const stepsByInterval = clampSix(snap.data()?.stepsByInterval);
+    if (stepsByInterval.reduce((a, b) => a + b, 0) <= 0) continue;
+    usableDays++;
+    for (let i = 0; i < 6; i++) sums[i] += stepsByInterval[i];
+  }
+
+  if (usableDays < PC_STUDY_BREAK_MIN_DAYS) return null;
+
+  let chosen = allowed[0];
+  for (const i of allowed) {
+    if (sums[i] < sums[chosen]) chosen = i;
+  }
+  return { intervalIndex: chosen };
+}
+
+type PcOffer = {
+  available: boolean;
+  reason: string | null;
+  [extra: string]: unknown;
+};
+
+/**
+ * Computes the availability + frozen parameters for all three challenge offers.
+ * Used by getMyPersonalChallenges (display) and acceptPersonalChallenge (re-check).
+ */
+async function pcComputeOffers(
+  uid: string,
+  profile: {
+    timezone: string;
+    preferredInactiveInterval: number | null;
+    quietHoursStartHour: number;
+    quietHoursEndHour: number;
+  },
+  dayKey: string,
+  nowDt: DateTime
+): Promise<{
+  raise_baseline: PcOffer;
+  study_break_boost: PcOffer;
+  campus_explorer: PcOffer;
+}> {
+  const tz = profile.timezone;
+
+  // --- Raise Your Baseline ---
+  const baselineResult = await pcComputeBaseline(uid, dayKey, tz);
+  let raiseBaseline: PcOffer;
+  if (baselineResult == null) {
+    raiseBaseline = {
+      available: false,
+      reason: "Keep walking for a few more days to unlock your personal baseline.",
+      baselineSteps: 0,
+      difficulties: {},
+    };
+  } else {
+    const difficulties: Record<string, { percent: number; targetSteps: number; reward: number }> = {};
+    for (const d of PC_DIFFICULTIES) {
+      const tier = PC_BASELINE_TIERS[d];
+      difficulties[d] = {
+        percent: tier.percent,
+        targetSteps: Math.round(baselineResult.baseline * (1 + tier.percent)),
+        reward: tier.reward,
+      };
+    }
+    raiseBaseline = {
+      available: true,
+      reason: null,
+      baselineSteps: baselineResult.baseline,
+      difficulties,
+    };
+  }
+
+  // --- Study-Break Boost ---
+  const interval = await pcComputeStudyBreakInterval(uid, profile, dayKey, tz);
+  let studyBreak: PcOffer;
+  if (interval == null) {
+    studyBreak = {
+      available: false,
+      reason: "Unlocks after 3 days of verified activity.",
+      selectedIntervalIndex: null,
+      selectedIntervalLabel: null,
+      goalSteps: PC_STUDY_BREAK_TARGET_STEPS,
+      reward: PC_STUDY_BREAK_REWARD,
+    };
+  } else {
+    const windowEndHour = (interval.intervalIndex * 4) % 24 + 4;
+    const windowEnded = nowDt.hour >= windowEndHour;
+    studyBreak = {
+      available: !windowEnded,
+      reason: windowEnded
+        ? "Your personal movement window has already passed. Try this challenge tomorrow."
+        : null,
+      selectedIntervalIndex: interval.intervalIndex,
+      selectedIntervalLabel: pcIntervalLabel(interval.intervalIndex),
+      goalSteps: PC_STUDY_BREAK_TARGET_STEPS,
+      reward: PC_STUDY_BREAK_REWARD,
+    };
+  }
+
+  // --- Campus Explorer ---
+  // No bonus-station visit is required; Campus Explorer is 1,200 verified
+  // campus steps only, so it is always offered (still one challenge per day).
+  const campusExplorer: PcOffer = {
+    available: true,
+    reason: null,
+    goalSteps: PC_CAMPUS_TARGET_STEPS,
+    stationGoal: PC_CAMPUS_STATION_GOAL,
+    reward: PC_CAMPUS_REWARD,
+  };
+
+  return {
+    raise_baseline: raiseBaseline,
+    study_break_boost: studyBreak,
+    campus_explorer: campusExplorer,
+  };
+}
+
+/**
+ * Serializes the stored daily challenge document into a client-safe object.
+ */
+function pcSerializeActive(data: Record<string, unknown>): Record<string, unknown> {
+  // Study-Break Boost is bound to its 4-hour window: expose the window bounds
+  // so the client can count down to the real deadline instead of midnight.
+  let windowStartMs: number | null = null;
+  let windowEndMs: number | null = null;
+  if (
+    data.challengeType === "study_break_boost" &&
+    Number.isInteger(data.selectedIntervalIndex) &&
+    typeof data.dayKey === "string" &&
+    typeof data.timezone === "string"
+  ) {
+    const ws = intervalStart(data.dayKey, data.selectedIntervalIndex as number, data.timezone);
+    windowStartMs = ws.toMillis();
+    windowEndMs = ws.plus({ hours: 4 }).toMillis();
+  }
+  return {
+    challengeType: typeof data.challengeType === "string" ? data.challengeType : null,
+    difficulty: typeof data.difficulty === "string" ? data.difficulty : null,
+    status: typeof data.status === "string" ? data.status : "active",
+    rewardPoints: Number.isInteger(data.rewardPoints) ? data.rewardPoints : 0,
+    baselineSteps: Number.isInteger(data.baselineSteps) ? data.baselineSteps : 0,
+    targetSteps: Number.isInteger(data.targetSteps) ? data.targetSteps : 0,
+    progressSteps: Number.isInteger(data.progressSteps) ? data.progressSteps : 0,
+    selectedIntervalIndex: Number.isInteger(data.selectedIntervalIndex)
+      ? data.selectedIntervalIndex
+      : null,
+    selectedIntervalLabel:
+      typeof data.selectedIntervalLabel === "string" ? data.selectedIntervalLabel : null,
+    stationGoal: PC_CAMPUS_STATION_GOAL,
+    stationVisitQualified: data.stationVisitQualified === true,
+    challengeRewardGranted: data.challengeRewardGranted === true,
+    acceptedAtMs: pcTimestampToMillis(data.acceptedAt),
+    completedAtMs: pcTimestampToMillis(data.completedAt),
+    windowStartMs,
+    windowEndMs,
+  };
+}
+
+/**
+ * evaluatePersonalChallenge
+ *
+ * Recomputes progress for the active daily challenge from trusted server data
+ * and, when every requirement is satisfied, grants the reward EXACTLY ONCE
+ * through a Firestore transaction guarded by `challengeRewardGranted`.
+ *
+ * The reward is added to the same daily bonus accumulator used by BLE station
+ * visits and campus-area steps, so it flows into daily points, cumulative
+ * points and the leaderboard through the existing trusted score path.
+ */
+async function evaluatePersonalChallenge(uid: string, dayKey: string): Promise<void> {
+  const challengeRef = db.doc(`users/${uid}/personal_challenges/${dayKey}`);
+  const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
+  const visitRef = db.doc(`users/${uid}/bonus_visits/${dayKey}`);
+  const userRef = db.doc(`users/${uid}`);
+
+  let didGrant = false;
+
+  await db.runTransaction(async (tx) => {
+    const [cSnap, dSnap, vSnap] = await Promise.all([
+      tx.get(challengeRef),
+      tx.get(dailyRef),
+      tx.get(visitRef),
+    ]);
+
+    if (!cSnap.exists) return;
+    const c = cSnap.data() ?? {};
+    if (c.status !== "active") return; // only active challenges are evaluated
+    if (c.challengeRewardGranted === true) return; // reward already granted
+
+    const tz = typeof c.timezone === "string" ? c.timezone : DEFAULT_TZ;
+    const daily = dSnap.data() ?? {};
+    const currentCampusSteps = pcCampusStepsFromDaily(daily);
+
+    const stepScope = pcStepScopeFromChallenge(c);
+    const currentScopedSteps = pcStepsForScope(daily, stepScope);
+
+    const stepsAtAcceptance = Number.isInteger(c.stepsAtAcceptance)
+      ? (c.stepsAtAcceptance as number)
+      : 0;
+    const acceptedAtMs = pcTimestampToMillis(c.acceptedAt);
+    const nowDt = DateTime.now().setZone(tz);
+
+    const patch: Record<string, unknown> = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    let requirementsMet = false;
+
+    if (c.challengeType === "raise_baseline") {
+      const target = Number.isInteger(c.targetSteps) ? (c.targetSteps as number) : 0;
+      const progress = Math.max(0, currentScopedSteps - stepsAtAcceptance);
+      patch.progressSteps = Math.min(progress, target);
+      requirementsMet = target > 0 && progress >= target;
+    } else if (c.challengeType === "study_break_boost") {
+        const idx = Number.isInteger(c.selectedIntervalIndex)
+          ? (c.selectedIntervalIndex as number)
+          : 0;
+
+        const winStart = intervalStart(dayKey, idx, tz);
+        const winEnd = winStart.plus({ hours: 4 });
+        const intervalSteps = clampSix(daily.stepsByInterval)[idx];
+
+        let progress: number;
+
+        if (stepScope === "all_valid_steps") {
+          // New challenges save the interval's current total at acceptance.
+          // Only steps added afterwards inside this interval count.
+          const intervalStepsAtAcceptance = Number.isInteger(c.intervalStepsAtAcceptance)
+            ? (c.intervalStepsAtAcceptance as number)
+            : intervalSteps;
+
+          progress = nowDt < winStart
+            ? 0
+            : Math.max(0, intervalSteps - intervalStepsAtAcceptance);
+
+          patch.progressSteps = Math.min(progress, PC_STUDY_BREAK_TARGET_STEPS);
+        } else {
+          // Preserve the old campus-only behavior for challenges created before this update.
+          const insideWindow = nowDt >= winStart && nowDt < winEnd;
+
+          let windowStart = Number.isInteger(c.studyBreakWindowStartSteps)
+            ? (c.studyBreakWindowStartSteps as number)
+            : null;
+
+          if (windowStart == null && insideWindow) {
+            windowStart = currentCampusSteps;
+            patch.studyBreakWindowStartSteps = windowStart;
+          }
+
+          progress = Number.isInteger(c.progressSteps) ? (c.progressSteps as number) : 0;
+
+          if (windowStart != null && insideWindow) {
+            progress = Math.max(0, currentCampusSteps - windowStart);
+            patch.progressSteps = Math.min(progress, PC_STUDY_BREAK_TARGET_STEPS);
+          }
+        }
+
+        requirementsMet = progress >= PC_STUDY_BREAK_TARGET_STEPS;
+
+        if (!requirementsMet && nowDt >= winEnd) {
+          patch.status = "expired";
+          tx.set(challengeRef, patch, { merge: true });
+          return;
+        }
+    } else if (c.challengeType === "campus_explorer") {
+      const progress = Math.max(0, currentCampusSteps - stepsAtAcceptance);
+      patch.progressSteps = Math.min(progress, PC_CAMPUS_TARGET_STEPS);
+
+      let stationQualified = false;
+      if (vSnap.exists) {
+        const visitedMs = pcTimestampToMillis(vSnap.data()?.visitedAt);
+        // Only a station visit AFTER acceptance qualifies for this challenge.
+        stationQualified = visitedMs >= acceptedAtMs && acceptedAtMs > 0;
+        if (stationQualified) {
+          const sid = vSnap.data()?.stationId;
+          patch.qualifiedStationId = typeof sid === "string" ? sid : null;
+        }
+      }
+      patch.stationVisitQualified = stationQualified;
+      // Station visit no longer required: 1,200 verified campus steps is enough.
+      requirementsMet = progress >= PC_CAMPUS_TARGET_STEPS;
+    } else {
+      return;
+    }
+
+    if (requirementsMet) {
+      const rewardPoints = Number.isInteger(c.rewardPoints) ? (c.rewardPoints as number) : 0;
+
+      patch.status = "completed";
+      patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+      patch.challengeRewardGranted = true;
+
+      if (rewardPoints > 0) {
+        // Same trusted daily-bonus accumulator used by BLE + campus-area rewards.
+        tx.set(
+          dailyRef,
+          {
+            uid,
+            dayKey,
+            bonusPoints: admin.firestore.FieldValue.increment(rewardPoints),
+            challengeBonusPoints: admin.firestore.FieldValue.increment(rewardPoints),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        tx.set(
+          userRef,
+          {
+            cumulativeTotalPoints: admin.firestore.FieldValue.increment(rewardPoints),
+            cumulativeBonusPoints: admin.firestore.FieldValue.increment(rewardPoints),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
+      didGrant = true;
+    }
+
+    tx.set(challengeRef, patch, { merge: true });
+  });
+
+  if (didGrant) {
+    try {
+      await recalculateLeaderboardForDay(dayKey);
+    } catch (err) {
+      logger.error(`evaluatePersonalChallenge: leaderboard recalculation failed for ${dayKey}`, err);
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Callable: getMyPersonalChallenges
+// -----------------------------------------------------------------------------
+
+export const getMyPersonalChallenges = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+  await ensureUserDoc(uid);
+
+  const profile = await getUserProfile(uid);
+  const tz = profile.timezone;
+  const nowDt = DateTime.now().setZone(tz);
+  const dayKey = toDayKey(nowDt);
+
+  // Refresh progress / completion from trusted data before returning state.
+  try {
+    await evaluatePersonalChallenge(uid, dayKey);
+  } catch (err) {
+    logger.error(`getMyPersonalChallenges: evaluate failed for ${uid}/${dayKey}`, err);
+  }
+
+  const challengeSnap = await db.doc(`users/${uid}/personal_challenges/${dayKey}`).get();
+  const hasChallenge = challengeSnap.exists;
+  const active = hasChallenge ? pcSerializeActive(challengeSnap.data() ?? {}) : null;
+
+  // Offers are only meaningful when the user has not yet chosen a challenge.
+  const offers = hasChallenge
+    ? null
+    : await pcComputeOffers(uid, profile, dayKey, nowDt);
+
+  const nextMidnightMs = nowDt.plus({ days: 1 }).startOf("day").toMillis();
+
+  return {
+    ok: true,
+    dayKey,
+    timezone: tz,
+    serverNowMs: nowDt.toMillis(),
+    midnightMs: nextMidnightMs,
+    active,
+    offers,
+  };
+});
+
+// -----------------------------------------------------------------------------
+// Callable: acceptPersonalChallenge
+// -----------------------------------------------------------------------------
+
+export const acceptPersonalChallenge = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+  await ensureUserDoc(uid);
+
+  const challengeTypeRaw = request.data?.challengeType as unknown;
+  const challengeType =
+    typeof challengeTypeRaw === "string" ? (challengeTypeRaw.trim() as PcChallengeType) : "";
+  if (!PC_CHALLENGE_TYPES.includes(challengeType as PcChallengeType)) {
+    throw new HttpsError("invalid-argument", "Unknown challengeType.");
+  }
+
+  let difficulty: PcDifficulty | null = null;
+  if (challengeType === "raise_baseline") {
+    const dRaw = request.data?.difficulty as unknown;
+    const d = typeof dRaw === "string" ? (dRaw.trim() as PcDifficulty) : "";
+    if (!PC_DIFFICULTIES.includes(d as PcDifficulty)) {
+      throw new HttpsError("invalid-argument", "difficulty must be easy | medium | hard.");
+    }
+    difficulty = d as PcDifficulty;
+  }
+
+  const profile = await getUserProfile(uid);
+  const tz = profile.timezone;
+  const nowDt = DateTime.now().setZone(tz);
+  const dayKey = toDayKey(nowDt);
+
+  // Re-validate availability with authoritative server data (outside the txn:
+  // baselines and intervals are historical and stable within the race window).
+  const offers = await pcComputeOffers(uid, profile, dayKey, nowDt);
+  const offer = offers[challengeType as PcChallengeType];
+  if (!offer.available) {
+    throw new HttpsError(
+      "failed-precondition",
+      typeof offer.reason === "string" ? offer.reason : "This challenge is not available today."
+    );
+  }
+
+  // Freeze the parameters for the chosen challenge.
+  const frozen: Record<string, unknown> = {
+    uid,
+    dayKey,
+    timezone: tz,
+    challengeType,
+    difficulty,
+    status: "active",
+    progressSteps: 0,
+    stationVisitQualified: false,
+    qualifiedStationId: null,
+    baselineSteps: 0,
+    targetSteps: 0,
+    rewardPoints: 0,
+    selectedIntervalIndex: null,
+    selectedIntervalLabel: null,
+    stepScope:
+      challengeType === "campus_explorer"
+        ? "campus_qualified_steps"
+        : "all_valid_steps",
+
+    intervalStepsAtAcceptance: null,
+    challengeRewardGranted: false,
+  };
+
+  if (challengeType === "raise_baseline") {
+    const diffs = offer.difficulties as Record<
+      string,
+      { percent: number; targetSteps: number; reward: number }
+    >;
+    const picked = diffs[difficulty as string];
+    frozen.baselineSteps = offer.baselineSteps as number;
+    frozen.targetSteps = picked.targetSteps;
+    frozen.rewardPoints = picked.reward;
+  } else if (challengeType === "study_break_boost") {
+    frozen.selectedIntervalIndex = offer.selectedIntervalIndex as number;
+    frozen.selectedIntervalLabel = offer.selectedIntervalLabel as string;
+    frozen.targetSteps = PC_STUDY_BREAK_TARGET_STEPS;
+    frozen.rewardPoints = PC_STUDY_BREAK_REWARD;
+  } else if (challengeType === "campus_explorer") {
+    frozen.targetSteps = PC_CAMPUS_TARGET_STEPS;
+    frozen.rewardPoints = PC_CAMPUS_REWARD;
+  }
+
+  const challengeRef = db.doc(`users/${uid}/personal_challenges/${dayKey}`);
+  const dailyRef = db.doc(`users/${uid}/daily/${dayKey}`);
+
+  await db.runTransaction(async (tx) => {
+    const [existingSnap, dailySnap] = await Promise.all([
+      tx.get(challengeRef),
+      tx.get(dailyRef),
+    ]);
+
+    // One challenge per day: any existing doc means a choice was already made.
+    if (existingSnap.exists) {
+      const existing = existingSnap.data() ?? {};
+      if (existing.status === "active" || existing.status === "completed") {
+        throw new HttpsError(
+          "failed-precondition",
+          "You have already selected a challenge for today."
+        );
+      }
+      if (existing.status === "expired") {
+        throw new HttpsError(
+          "failed-precondition",
+          "Today’s challenge slot has already been used."
+        );
+      }
+    }
+
+    const dailyAtAcceptance = dailySnap.data();
+    const frozenScope = frozen.stepScope as PcStepScope;
+
+    frozen.stepsAtAcceptance = pcStepsForScope(dailyAtAcceptance, frozenScope);
+
+    if (challengeType === "study_break_boost") {
+      const selectedIntervalIndex = frozen.selectedIntervalIndex as number;
+
+      frozen.intervalStepsAtAcceptance =
+        clampSix(dailyAtAcceptance?.stepsByInterval)[selectedIntervalIndex];
+    }
+    frozen.acceptedAt = admin.firestore.FieldValue.serverTimestamp();
+    frozen.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    frozen.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+
+    tx.set(challengeRef, frozen, { merge: true });
+  });
+
+  // Evaluate once so any already-satisfied requirement is reflected immediately.
+  try {
+    await evaluatePersonalChallenge(uid, dayKey);
+  } catch (err) {
+    logger.error(`acceptPersonalChallenge: evaluate failed for ${uid}/${dayKey}`, err);
+  }
+
+  const finalSnap = await challengeRef.get();
+
+  return {
+    ok: true,
+    dayKey,
+    timezone: tz,
+    serverNowMs: nowDt.toMillis(),
+    midnightMs: nowDt.plus({ days: 1 }).startOf("day").toMillis(),
+    active: pcSerializeActive(finalSnap.data() ?? {}),
+    offers: null,
   };
 });
 

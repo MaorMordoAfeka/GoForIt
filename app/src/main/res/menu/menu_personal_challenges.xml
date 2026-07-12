@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Toolbar menu for PersonalChallengesActivity.
+  Provides a single manual "refresh" action; the screen does not poll,
+  so this is how users force a re-fetch of server-authoritative state.
+-->
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_refresh"
+        android:icon="@android:drawable/ic_menu_rotate"
+        android:title="@string/pc_refresh"
+        app:iconTint="#FFFFFF"
+        app:showAsAction="ifRoom" />
+
+</menu>

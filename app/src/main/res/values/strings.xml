@@ -61,4 +61,78 @@
         libero vel nunc consequat, quis tincidunt nisl eleifend. Cras bibendum enim a justo luctus
         vestibulum. Fusce dictum libero quis erat maximus, vitae volutpat diam dignissim.
     </string>
+    <!-- Toolbar / chrome -->
+    <string name="pc_back">Back</string>
+    <string name="pc_screen_title">Personal Challenges</string>
+    <string name="pc_refresh">Refresh</string>
+
+    <!-- Header -->
+    <string name="pc_subtitle">Choose one goal for today and earn bonus points.</string>
+    <string name="pc_one_per_day">One challenge per day</string>
+
+    <!-- Entry point on the Steps screen -->
+    <string name="pc_steps_card_subtitle">One daily goal, bonus points</string>
+
+    <!-- Loading / error / offline -->
+    <string name="pc_loading">Loading your challenges\u2026</string>
+    <string name="pc_error_generic">Something went wrong. Please try again.</string>
+    <string name="pc_retry">Retry</string>
+    <string name="pc_offline_cached">You\'re offline. Showing the last saved state \u2014 it may be out of date.</string>
+
+    <!-- Active-challenge status pill -->
+    <string name="pc_status_active">ACTIVE</string>
+    <string name="pc_status_completed">COMPLETED</string>
+    <string name="pc_status_expired">EXPIRED</string>
+
+    <!-- Active-challenge shared lines -->
+    <string name="pc_reward_line">Reward: +%1$d bonus points</string>
+    <string name="pc_time_remaining">Time left today: %1$s</string>
+    <string name="pc_window_time_remaining">Time left in your window: %1$s</string>
+    <string name="pc_window_starts_in">Your window starts in: %1$s</string>
+    <string name="pc_expired_window">This window has ended for today.</string>
+
+    <!-- Active-challenge progress bodies -->
+    <string name="pc_progress_baseline">%1$s / %2$s verified steps</string>
+    <string name="pc_progress_study">%1$s / %2$s steps during %3$s</string>
+    <string name="pc_progress_campus_steps">Steps: %1$s / %2$s</string>
+    <string name="pc_progress_campus_station">Bonus station: %1$d / %2$d</string>
+
+    <!-- Completion -->
+    <string name="pc_complete_title">Challenge complete</string>
+    <string name="pc_complete_reward">+%1$d bonus points added to today\'s score</string>
+
+    <!-- Raise Your Baseline -->
+    <string name="pc_baseline_title">Raise Your Baseline</string>
+    <string name="pc_baseline_desc">Walk more than your usual daily activity.</string>
+    <string name="pc_baseline_info">Your 7-day baseline: %1$s steps</string>
+    <string name="pc_baseline_easy" formatted="false">Easy \u00B7 10% \u00B7 +200 bonus points</string>
+    <string name="pc_baseline_medium" formatted="false">Medium \u00B7 20% \u00B7 +225 bonus points</string>
+    <string name="pc_baseline_hard" formatted="false">Hard \u00B7 30% \u00B7 +250 bonus points</string>
+    <string name="pc_baseline_target_hint">Pick a difficulty to see your target.</string>
+    <string name="pc_baseline_target_value">Target: %1$s verified steps from now</string>
+
+    <!-- Study-Break Boost -->
+    <string name="pc_study_title">Study-Break Boost</string>
+    <string name="pc_study_desc">Move during your usual slowest time of day.</string>
+    <string name="pc_study_window">Your focus window: %1$s</string>
+    <string name="pc_study_goal">Walk %1$s verified steps during this window</string>
+    <string name="pc_study_target_value">%1$s steps during %2$s</string>
+    <string name="pc_unknown_window">your focus window</string>
+
+    <!-- Campus Explorer -->
+    <string name="pc_campus_title">Campus Explorer</string>
+    <string name="pc_campus_desc">Rack up verified steps around campus.</string>
+    <string name="pc_campus_req_steps">Walk 1,200 verified steps inside the college perimeter</string>
+    <string name="pc_campus_req_station">Visit 1 verified bonus station</string>
+    <string name="pc_campus_note">Only one bonus-station visit is available each day.</string>
+    <string name="pc_campus_target_value">%1$s verified steps + 1 bonus station</string>
+
+    <!-- Actions / confirmation dialog -->
+    <string name="pc_start_challenge">Start challenge</string>
+    <string name="pc_not_now">Not now</string>
+    <string name="pc_pick_difficulty">Pick a difficulty first.</string>
+    <string name="pc_already_selected">You have already selected a challenge for today.</string>
+    <string name="pc_accept_failed">Couldn\'t start the challenge. Please try again.</string>
+    <string name="pc_confirm_body">%1$s\n\nReward: +%2$d bonus points.\n\nYou can activate only one challenge today and cannot change it later.</string>
+
 </resources>

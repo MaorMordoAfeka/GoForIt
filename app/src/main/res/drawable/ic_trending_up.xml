@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Upward trend arrow — Material "trending_up" glyph.
+  Used by the "Raise Your Baseline" personal-challenge card.
+  Tinted at runtime; the base tint keeps it visible in previews.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#7C39A0">
+
+    <path
+        android:fillColor="#000000"
+        android:pathData="M16,6 l2.29,2.29 -4.88,4.88 -4,-4L2,16.59 3.41,18l6,-6 4,4 6.3,-6.29L22,12V6z" />
+
+</vector>

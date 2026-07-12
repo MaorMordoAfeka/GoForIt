@@ -21,6 +21,7 @@ import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.core.data.StepsData.StepBus
 import com.example.goforitGit.core.util.StepsUtils.StepCounterZC
+import com.example.goforitGit.feature.challenges.ui.PersonalChallengesActivity
 import com.example.goforitGit.feature.leaderboard.ui.LeaderboardActivity
 import com.example.goforitGit.feature.map.ui.MapAndRoutesActivity
 import com.example.goforitGit.feature.profile.ui.ProfileActivity
@@ -109,9 +110,14 @@ class StepsFragment : Fragment() {
                 startActivity(Intent(requireContext(), ProfileActivity::class.java))
             }
 
-        view.findViewById<MaterialCardView>(R.id.cardBle)
+        view.findViewById<MaterialCardView>(R.id.cardPersonalChallenges)
             .setOnClickListener {
-                startActivity(Intent(requireContext(), MapAndRoutesActivity::class.java))
+                startActivity(Intent(requireContext(), PersonalChallengesActivity::class.java))
+            }
+
+        view.findViewById<MaterialCardView>(R.id.btnPersonalChallenges)
+            .setOnClickListener {
+                startActivity(PersonalChallengesActivity.createIntent(requireContext()))
             }
     }
 
@@ -193,7 +199,7 @@ class StepsFragment : Fragment() {
         return when (this) {
             StepCounterZC.MotionMode.UNKNOWN -> "Unknown"
             StepCounterZC.MotionMode.STATIONARY -> "Stationary"
-            StepCounterZC.MotionMode.STANDING_STILL -> "Standing still"
+            StepCounterZC.MotionMode.STANDING_STILL -> "Standing"
             StepCounterZC.MotionMode.WALKING -> "Walking"
             StepCounterZC.MotionMode.RUNNING -> "Running"
             StepCounterZC.MotionMode.CYCLING -> "Cycling"
