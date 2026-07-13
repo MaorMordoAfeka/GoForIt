@@ -277,7 +277,7 @@ class QaActivity : AppCompatActivity() {
     }
 
     private fun restoreUiState() {
-        etLeaderboardDayKey.setText(LocalDate.now().toString())
+        etLeaderboardDayKey.setText("2099-12-31")
         etBleRunId.setText(generateNextBleRunId())
 
         updateBleSummary()

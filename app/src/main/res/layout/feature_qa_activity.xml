@@ -187,6 +187,7 @@
                         android:id="@+id/etLeaderboardDayKey"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:text="2099-12-31"
                         android:inputType="date"
                         android:maxLines="1" />
                 </com.google.android.material.textfield.TextInputLayout>
