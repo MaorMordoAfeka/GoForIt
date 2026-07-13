@@ -51,6 +51,9 @@
         <!-- Activities -->
         <!-- ===================================================== -->
         <activity
+            android:name=".feature.qa.ui.QaActivity"
+            android:exported="false" />
+        <activity
             android:name=".feature.challenges.ui.PersonalChallengesActivity"
             android:exported="false"
             android:label="@string/pc_screen_title"

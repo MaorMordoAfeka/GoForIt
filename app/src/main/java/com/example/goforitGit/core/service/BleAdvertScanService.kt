@@ -25,6 +25,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.UserManager
 import android.util.Log
 import android.widget.Toast
@@ -71,6 +72,22 @@ class BleAdvertScanService : Service() {
     private var scanner: BluetoothLeScanner? = null
 
     private val stopRequested = AtomicBoolean(false)
+
+    /**
+     * QA mode is opt-in and is armed through [startQaRun]. Production starts
+     * keep this false, so all existing reward behavior remains unchanged.
+     */
+    @Volatile
+    private var qaModeActive: Boolean = false
+
+    @Volatile
+    private var activeQaRunId: String? = null
+
+    @Volatile
+    private var activeQaRunStartedAtElapsedMs: Long = 0L
+
+    /** Allows only one in-flight/successful Firebase request per QA run ID. */
+    private val qaRequestStarted = AtomicBoolean(false)
 
     @Volatile
     private var lastStartId: Int = 0
@@ -189,6 +206,9 @@ class BleAdvertScanService : Service() {
             force = true
         )
 
+        // Scanning starts from onStartCommand(), after the intent has selected
+        // production mode or armed a QA run. This prevents a cold-start race in
+        // which a QA launch could accidentally execute the production reward path.
         if (!isUserUnlocked()) {
             updateBleNotification(
                 text = "BLE waiting • unlock phone to scan",
@@ -196,38 +216,75 @@ class BleAdvertScanService : Service() {
             )
 
             registerUserUnlockReceiver()
-            return
         }
-
-        ensureBluetoothReadyAndScan()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         lastStartId = startId
 
         when (intent?.action) {
-            ACTION_START_FGS -> {
-                if (!stopRequested.get()) {
-                    if (!isUserUnlocked()) {
-                        updateBleNotification(
-                            text = "BLE waiting • unlock phone to scan",
-                            force = true
-                        )
-
-                        registerUserUnlockReceiver()
-                    } else {
-                        ensureBluetoothReadyAndScan()
-                    }
-                }
-            }
-
             ACTION_STOP -> {
                 stopSelfSafely("Stop requested")
                 return START_NOT_STICKY
             }
+
+            ACTION_START_QA_RUN -> {
+                val qaRunId = intent.getStringExtra(EXTRA_QA_RUN_ID)
+                    ?.trim()
+                    ?.takeIf { QA_RUN_ID_REGEX.matches(it) }
+
+                qaModeActive = true
+                activeQaRunId = qaRunId
+                activeQaRunStartedAtElapsedMs = SystemClock.elapsedRealtime()
+                qaRequestStarted.set(false)
+
+                if (qaRunId == null) {
+                    updateBleNotification(
+                        text = "QA BLE run not armed • invalid run ID",
+                        force = true
+                    )
+                    Log.w(TAG, "Rejected invalid QA run ID")
+                    return START_STICKY
+                }
+
+                updateBleNotification(
+                    text = "QA BLE run armed • $qaRunId",
+                    force = true
+                )
+            }
+
+            ACTION_START_FGS -> {
+                // Explicit normal start exits QA mode and restores the existing
+                // production reward behavior.
+                qaModeActive = false
+                activeQaRunId = null
+                activeQaRunStartedAtElapsedMs = 0L
+                qaRequestStarted.set(false)
+            }
+
+            null -> {
+                // START_STICKY process recreation defaults safely to production.
+                qaModeActive = false
+                activeQaRunId = null
+                activeQaRunStartedAtElapsedMs = 0L
+                qaRequestStarted.set(false)
+            }
         }
 
-        return START_STICKY
+        if (!stopRequested.get()) {
+            if (!isUserUnlocked()) {
+                updateBleNotification(
+                    text = "BLE waiting • unlock phone to scan",
+                    force = true
+                )
+
+                registerUserUnlockReceiver()
+            } else {
+                ensureBluetoothReadyAndScan()
+            }
+        }
+
+        return if (qaModeActive) START_NOT_STICKY else START_STICKY
     }
 
     override fun onDestroy() {
@@ -711,49 +768,147 @@ class BleAdvertScanService : Service() {
             safeDeviceName(record)?.contains(deviceNameHint, ignoreCase = true) ?: true
 
         val notificationText =
-            if (nameOk && msg == "bonus station") {
-                serviceScope.launch {
-                    val result = FirebaseServerApi.recordBonusVisitResult(stationId = msg)
+            if (nameOk && msg == BONUS_STATION_MESSAGE) {
+                val isQaCall = qaModeActive
+                val qaRunId = activeQaRunId
 
-                    result.onSuccess { ok ->
-                        if (ok) {
-                            Log.d("BONUS", "Bonus awarded ✅")
+                val shouldStartFirebaseRequest = when {
+                    !isQaCall -> true
+                    qaRunId == null -> false
+                    else -> qaRequestStarted.compareAndSet(false, true)
+                }
 
-                            updateBleNotification(
-                                text = "Bonus station detected • reward awarded",
-                                force = true
+                if (shouldStartFirebaseRequest) {
+                    serviceScope.launch {
+                        val result = FirebaseServerApi.recordBonusVisitResult(
+                            stationId = msg,
+                            qaRunId = if (isQaCall) qaRunId else null
+                        )
+
+                        result.onSuccess { ok ->
+                            // Ignore a late response from a previous QA run after
+                            // the tester has already armed the next run ID.
+                            if (isQaCall && activeQaRunId != qaRunId) {
+                                return@onSuccess
+                            }
+
+                            if (isQaCall) {
+                                if (ok) {
+                                    Log.d("BONUS_QA", "QA BLE run recorded: $qaRunId")
+                                    updateBleNotification(
+                                        text = "QA BLE run recorded • $qaRunId",
+                                        force = true
+                                    )
+                                    sendQaRunResult(
+                                        runId = qaRunId.orEmpty(),
+                                        success = true,
+                                        duplicate = false,
+                                        message = "Firebase recorded the QA BLE visit."
+                                    )
+                                } else {
+                                    Log.d("BONUS_QA", "QA BLE run already exists: $qaRunId")
+                                    updateBleNotification(
+                                        text = "QA BLE run already recorded • $qaRunId",
+                                        force = true
+                                    )
+                                    sendQaRunResult(
+                                        runId = qaRunId.orEmpty(),
+                                        success = false,
+                                        duplicate = true,
+                                        message = "The QA run ID already exists in Firebase."
+                                    )
+                                }
+                            } else if (ok) {
+                                Log.d("BONUS", "Bonus awarded ✅")
+
+                                updateBleNotification(
+                                    text = "Bonus station detected • reward awarded",
+                                    force = true
+                                )
+                            } else {
+                                Log.d("BONUS", "Bonus already claimed today")
+
+                                updateBleNotification(
+                                    text = "Bonus station detected • already claimed today",
+                                    force = true
+                                )
+                            }
+                        }.onFailure { e ->
+                            // Do not let an old QA request overwrite the status of
+                            // a newer run that is already armed.
+                            if (isQaCall && activeQaRunId != qaRunId) {
+                                return@onFailure
+                            }
+
+                            Log.e(
+                                if (isQaCall) "BONUS_QA" else "BONUS",
+                                "Bonus request failed: ${e.message}",
+                                e
                             )
-                        } else {
-                            Log.d("BONUS", "Bonus already claimed today")
+
+                            // A transient backend/network error may recover while
+                            // the tester is still inside the 10-second window.
+                            // Re-arm only this QA request; production behavior is
+                            // left exactly as it was.
+                            if (isQaCall && activeQaRunId == qaRunId) {
+                                qaRequestStarted.set(false)
+                            }
 
                             updateBleNotification(
-                                text = "Bonus station detected • already claimed today",
+                                text = if (isQaCall) {
+                                    "QA BLE run failed • retrying on next signal"
+                                } else {
+                                    "Bonus station detected • reward check failed"
+                                },
                                 force = true
                             )
                         }
-                    }.onFailure { e ->
-                        Log.e("BONUS", "Bonus failed: ${e.message}", e)
-
-                        updateBleNotification(
-                            text = "Bonus station detected • reward check failed",
-                            force = true
-                        )
                     }
                 }
 
-                "Station detected • bonus station"
+                when {
+                    isQaCall && qaRunId == null -> "Station detected • QA run ID invalid"
+                    isQaCall -> "Station detected • QA run $qaRunId"
+                    else -> "Station detected • bonus station"
+                }
             } else {
                 "Station signal received • $msg"
             }
 
         updateBleNotification(
             text = notificationText,
-            force = nameOk && msg == "bonus station"
+            force = nameOk && msg == BONUS_STATION_MESSAGE
         )
 
         if (shouldToast && SHOW_BLE_TOASTS) {
             toast(notificationText)
         }
+    }
+
+    private fun sendQaRunResult(
+        runId: String,
+        success: Boolean,
+        duplicate: Boolean,
+        message: String
+    ) {
+        if (runId.isBlank()) return
+
+        val elapsedMs = if (activeQaRunStartedAtElapsedMs > 0L) {
+            SystemClock.elapsedRealtime() - activeQaRunStartedAtElapsedMs
+        } else {
+            0L
+        }
+
+        val intent = Intent(ACTION_QA_RUN_RESULT).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_QA_RESULT_RUN_ID, runId)
+            putExtra(EXTRA_QA_RESULT_SUCCESS, success)
+            putExtra(EXTRA_QA_RESULT_DUPLICATE, duplicate)
+            putExtra(EXTRA_QA_RESULT_ELAPSED_MS, elapsedMs)
+            putExtra(EXTRA_QA_RESULT_MESSAGE, message)
+        }
+
+        sendBroadcast(intent)
     }
 
     private fun hasBtConnectPermission(): Boolean =
@@ -831,14 +986,46 @@ class BleAdvertScanService : Service() {
 
         private const val MAX_CONSECUTIVE_SCAN_FAILURES = 5
 
-        const val ACTION_START_FGS = "com.example.goforitGit.ACTION_START_BLE_FGS"
-        const val ACTION_STOP = "com.example.goforitGit.ACTION_STOP_BLE_FGS"
+        private const val BONUS_STATION_MESSAGE = "bonus station"
+        private val QA_RUN_ID_REGEX = Regex("^[A-Za-z0-9_-]{3,80}$")
 
+        const val ACTION_START_FGS = "com.example.goforitGit.ACTION_START_BLE_FGS"
+        const val ACTION_START_QA_RUN = "com.example.goforitGit.ACTION_START_BLE_QA_RUN"
+        const val ACTION_STOP = "com.example.goforitGit.ACTION_STOP_BLE_FGS"
+        const val EXTRA_QA_RUN_ID = "com.example.goforitGit.EXTRA_QA_RUN_ID"
+        const val ACTION_QA_RUN_RESULT = "com.example.goforitGit.ACTION_BLE_QA_RUN_RESULT"
+        const val EXTRA_QA_RESULT_RUN_ID = "qa_result_run_id"
+        const val EXTRA_QA_RESULT_SUCCESS = "qa_result_success"
+        const val EXTRA_QA_RESULT_DUPLICATE = "qa_result_duplicate"
+        const val EXTRA_QA_RESULT_ELAPSED_MS = "qa_result_elapsed_ms"
+        const val EXTRA_QA_RESULT_MESSAGE = "qa_result_message"
+
+        /** Starts the existing production BLE scanner behavior. */
         fun start(context: Context) {
             val intent = Intent(context, BleAdvertScanService::class.java).apply {
                 action = ACTION_START_FGS
             }
+            startForegroundServiceSafely(context, intent)
+        }
 
+        /**
+         * Arms one QA acceptance-test run. The ID must be unique for every
+         * physical attempt, for example: ble_20260713_mi11_01.
+         */
+        fun startQaRun(context: Context, qaRunId: String) {
+            val normalizedRunId = qaRunId.trim()
+            require(QA_RUN_ID_REGEX.matches(normalizedRunId)) {
+                "qaRunId must be 3..80 characters using only letters, numbers, underscores, or hyphens."
+            }
+
+            val intent = Intent(context, BleAdvertScanService::class.java).apply {
+                action = ACTION_START_QA_RUN
+                putExtra(EXTRA_QA_RUN_ID, normalizedRunId)
+            }
+            startForegroundServiceSafely(context, intent)
+        }
+
+        private fun startForegroundServiceSafely(context: Context, intent: Intent) {
             try {
                 ContextCompat.startForegroundService(context, intent)
             } catch (e: ForegroundServiceStartNotAllowedException) {
