@@ -13,6 +13,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -23,6 +24,9 @@ import com.example.goforitGit.feature.qa.QaAccess
 import com.example.goforitGit.navigation.DrawerNavigator
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.datepicker.CalendarConstraints
+import com.google.android.material.datepicker.DateValidatorPointBackward
+import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
@@ -30,8 +34,11 @@ import com.google.firebase.firestore.Query
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 
 class LeaderboardActivity : AppCompatActivity() {
 
@@ -108,6 +115,7 @@ class LeaderboardActivity : AppCompatActivity() {
     private lateinit var progressBottom: ProgressBar
     private lateinit var recyclerView: RecyclerView
 
+    private lateinit var btnSelectDate: MaterialButton
     private lateinit var btnPrevDay: Button
     private lateinit var btnToday: Button
     private lateinit var btnNextDay: Button
@@ -132,40 +140,109 @@ class LeaderboardActivity : AppCompatActivity() {
     private val firestore by lazy { FirebaseFirestore.getInstance() }
     private val auth by lazy { FirebaseAuth.getInstance() }
 
-    private var dayKey: String = ""
+    private lateinit var screenState: LeaderboardViewModel
+
+    /** Loading belongs to the current Activity instance and is reset after rotation. */
     private var isLoading = false
-    private var currentPageIndex = 0
-    private var hasNextPage = false
-    private var sortDescending = false
+
+    private var dayKey: String
+        get() = screenState.dayKey
+        set(value) { screenState.dayKey = value }
+
+    private var currentPageIndex: Int
+        get() = screenState.currentPageIndex
+        set(value) { screenState.currentPageIndex = value }
+
+    private var hasNextPage: Boolean
+        get() = screenState.hasNextPage
+        set(value) { screenState.hasNextPage = value }
+
+    private var sortDescending: Boolean
+        get() = screenState.sortDescending
+        set(value) { screenState.sortDescending = value }
 
     /** null = "All faculties" (normal paged ranking); otherwise filter players to this faculty. */
-    private var selectedFaculty: String? = null
+    private var selectedFaculty: String?
+        get() = screenState.selectedFaculty
+        set(value) { screenState.selectedFaculty = value }
 
-    private var currentPageEntriesAsc: List<LeaderboardEntry> = emptyList()
+    private var currentPageEntriesAsc: List<LeaderboardEntry>
+        get() = screenState.currentPageEntriesAsc
+        set(value) { screenState.currentPageEntriesAsc = value }
 
-    private var pendingScrollUid: String? = null
-    private var pendingScrollRank: Int? = null
+    private var pendingScrollUid: String?
+        get() = screenState.pendingScrollUid
+        set(value) { screenState.pendingScrollUid = value }
+
+    private var pendingScrollRank: Int?
+        get() = screenState.pendingScrollRank
+        set(value) { screenState.pendingScrollRank = value }
 
     /** Prevents old async username/photo loads from overwriting a newer page/day. */
-    private var profileLoadGeneration = 0
+    private var profileLoadGeneration: Int
+        get() = screenState.profileLoadGeneration
+        set(value) { screenState.profileLoadGeneration = value }
 
+    private var qaMode: Boolean
+        get() = screenState.qaMode
+        set(value) { screenState.qaMode = value }
 
-    private var qaMode = false
-    private var qaExpectEmpty = false
-    private var qaRunId = ""
-    private var qaStartedAtElapsedMs = 0L
-    private var qaResultReported = false
-    private var qaInitialLoadComplete = false
-    private var qaInitialLoadSucceeded = false
-    private var qaAwaitingProfileEnrichment = false
+    private var qaExpectEmpty: Boolean
+        get() = screenState.qaExpectEmpty
+        set(value) { screenState.qaExpectEmpty = value }
+
+    private var qaRunId: String
+        get() = screenState.qaRunId
+        set(value) { screenState.qaRunId = value }
+
+    private var qaStartedAtElapsedMs: Long
+        get() = screenState.qaStartedAtElapsedMs
+        set(value) { screenState.qaStartedAtElapsedMs = value }
+
+    private var qaResultReported: Boolean
+        get() = screenState.qaResultReported
+        set(value) { screenState.qaResultReported = value }
+
+    private var qaInitialLoadComplete: Boolean
+        get() = screenState.qaInitialLoadComplete
+        set(value) { screenState.qaInitialLoadComplete = value }
+
+    private var qaInitialLoadSucceeded: Boolean
+        get() = screenState.qaInitialLoadSucceeded
+        set(value) { screenState.qaInitialLoadSucceeded = value }
+
+    private var qaAwaitingProfileEnrichment: Boolean
+        get() = screenState.qaAwaitingProfileEnrichment
+        set(value) { screenState.qaAwaitingProfileEnrichment = value }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
         setContentView(R.layout.feature_leaderboard_activity)
 
+        screenState = ViewModelProvider(this)[LeaderboardViewModel::class.java]
         bindViews()
 
+        val isFirstCreation = !screenState.initialized
+        if (isFirstCreation) {
+            initializeScreenStateFromIntent()
+        } else {
+            // The previous Activity instance may still have asynchronous profile
+            // work finishing. Invalidate it before rendering the retained state.
+            profileLoadGeneration++
+        }
+
+        setupRecycler()
+        setupButtons()
+        updateControls()
+        renderActivePlayers(scrollToTop = false)
+
+        if (!screenState.hasLoadedData) {
+            loadRetainedSelection(showTopLoader = true)
+        }
+    }
+
+    private fun initializeScreenStateFromIntent() {
         qaMode = intent.getBooleanExtra(EXTRA_QA_MODE, false) &&
                 QaAccess.isAuthorized(auth.currentUser)
         qaExpectEmpty = intent.getBooleanExtra(EXTRA_QA_EXPECT_EMPTY, false)
@@ -180,12 +257,16 @@ class LeaderboardActivity : AppCompatActivity() {
             ?.takeIf { it.isNotBlank() }
             ?: defaultLeaderboardDayKey()
 
-        setupRecycler()
-        setupButtons()
-        updateControls()
-        renderCurrentPage(scrollToTop = true)
+        screenState.initialized = true
+    }
 
-        loadPageByIndex(0, showTopLoader = true)
+    private fun loadRetainedSelection(showTopLoader: Boolean) {
+        val faculty = selectedFaculty
+        if (faculty == null) {
+            loadPageByIndex(currentPageIndex, showTopLoader)
+        } else {
+            loadFilteredPlayers(faculty, showTopLoader)
+        }
     }
 
     private fun bindViews() {
@@ -197,6 +278,7 @@ class LeaderboardActivity : AppCompatActivity() {
         progressBottom = findViewById(R.id.progressBottom)
         recyclerView = findViewById(R.id.recyclerLeaderboard)
 
+        btnSelectDate = findViewById(R.id.btnSelectDate)
         btnPrevDay = findViewById(R.id.btnPrevDay)
         btnToday = findViewById(R.id.btnToday)
         btnNextDay = findViewById(R.id.btnNextDay)
@@ -235,6 +317,7 @@ class LeaderboardActivity : AppCompatActivity() {
             }
 
         btnFaculty.setOnClickListener { showFacultyChooser() }
+        btnSelectDate.setOnClickListener { showDateSelector() }
 
         btnPrevDay.setOnClickListener { changeDayBy(-1) }
         btnToday.setOnClickListener { goToToday() }
@@ -279,31 +362,62 @@ class LeaderboardActivity : AppCompatActivity() {
         return LocalDate.now(ZoneId.systemDefault()).toString()
     }
 
-    private fun changeDayBy(days: Long) {
-        val current = LocalDate.parse(dayKey)
-        val next = current.plusDays(days)
-        val today = LocalDate.parse(todayKey())
+    private fun showDateSelector() {
+        if (isLoading) return
 
-        if (next.isAfter(today)) return
+        val selectedDay = LocalDate.parse(dayKey)
+        val selectedDayUtcMillis = selectedDay
+            .atStartOfDay(ZoneOffset.UTC)
+            .toInstant()
+            .toEpochMilli()
 
-        dayKey = next.toString()
+        val constraints = CalendarConstraints.Builder()
+            // .setValidator(DateValidatorPointBackward.now()) // commented to allow future dates
+            .setOpenAt(selectedDayUtcMillis)
+            .build()
+
+        val picker = MaterialDatePicker.Builder.datePicker()
+            .setTitleText("Select leaderboard date")
+            .setSelection(selectedDayUtcMillis)
+            .setCalendarConstraints(constraints)
+            .setPositiveButtonText("View date")
+            .build()
+
+        picker.addOnPositiveButtonClickListener { selectedUtcMillis ->
+            val selectedDate = Instant.ofEpochMilli(selectedUtcMillis)
+                .atZone(ZoneOffset.UTC)
+                .toLocalDate()
+
+            selectDay(selectedDate)
+        }
+
+        picker.show(supportFragmentManager, "leaderboard_date_picker")
+    }
+
+    private fun selectDay(selectedDate: LocalDate) {
+        // val today = LocalDate.parse(todayKey()) // commented to allow future dates
+        // fif (selectedDate.isAfter(today)) return // commented to allow future dates
+        if (selectedDate.toString() == dayKey) return
+
+        dayKey = selectedDate.toString()
         currentPageIndex = 0
+        hasNextPage = false
+        currentPageEntriesAsc = emptyList()
+        screenState.hasLoadedData = false
         pendingScrollUid = null
         pendingScrollRank = null
         profileLoadGeneration++
+        renderActivePlayers(scrollToTop = false)
         reloadCurrentDay(showTopLoader = true)
     }
 
-    private fun goToToday() {
-        val today = todayKey()
-        if (dayKey == today) return
+    private fun changeDayBy(days: Long) {
+        val next = LocalDate.parse(dayKey).plusDays(days)
+        selectDay(next)
+    }
 
-        dayKey = today
-        currentPageIndex = 0
-        pendingScrollUid = null
-        pendingScrollRank = null
-        profileLoadGeneration++
-        reloadCurrentDay(showTopLoader = true)
+    private fun goToToday() {
+        selectDay(LocalDate.parse(todayKey()))
     }
 
     private fun refreshCurrentPage() {
@@ -366,11 +480,16 @@ class LeaderboardActivity : AppCompatActivity() {
         if (selectedFaculty == normalized) return
 
         selectedFaculty = normalized
+        currentPageIndex = 0
+        hasNextPage = false
+        currentPageEntriesAsc = emptyList()
+        screenState.hasLoadedData = false
         profileLoadGeneration++
         pendingScrollUid = null
         pendingScrollRank = null
 
         updateFacultyButtonLabel()
+        renderActivePlayers(scrollToTop = false)
         reloadPlayers(showTopLoader = true)
         updateControls()
     }
@@ -403,6 +522,7 @@ class LeaderboardActivity : AppCompatActivity() {
                     all.filter { normalizeFaculty(it.faculty) == requestedFaculty }
                 currentPageIndex = 0
                 hasNextPage = false
+                screenState.hasLoadedData = true
 
                 renderFilteredPlayers(scrollToTop = true)
                 enrichCurrentPageWithPublicProfiles(
@@ -506,6 +626,7 @@ class LeaderboardActivity : AppCompatActivity() {
                 val pageDocs = docsWithPeek.take(PAGE_SIZE)
                 currentPageEntriesAsc = pageDocs.mapNotNull { it.toLeaderboardEntryOrNull() }
                 currentPageIndex = pageIndex
+                screenState.hasLoadedData = true
 
                 renderCurrentPage(scrollToTop = true)
                 handlePendingScrollIfNeeded()
@@ -763,7 +884,10 @@ class LeaderboardActivity : AppCompatActivity() {
 
         val today = LocalDate.parse(todayKey())
         val selectedDay = LocalDate.parse(dayKey)
+        val dateLabelFormatter = DateTimeFormatter.ofPattern("EEE, MMM d, yyyy")
 
+        btnSelectDate.text = selectedDay.format(dateLabelFormatter)
+        btnSelectDate.isEnabled = !isLoading
         btnPrevDay.isEnabled = !isLoading
         btnToday.isEnabled = !isLoading && selectedDay != today
         btnNextDay.isEnabled = !isLoading && selectedDay.isBefore(today)
