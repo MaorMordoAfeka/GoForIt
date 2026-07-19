@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import androidx.core.widget.ImageViewCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
@@ -25,9 +26,12 @@ import com.example.goforitGit.feature.challenges.ui.PersonalChallengesActivity
 import com.example.goforitGit.feature.leaderboard.ui.LeaderboardActivity
 import com.example.goforitGit.feature.map.ui.MapAndRoutesActivity
 import com.example.goforitGit.feature.profile.ui.ProfileActivity
+import com.example.goforitGit.feature.qa.QaAccess
+import com.example.goforitGit.feature.qa.ui.QaActivity
 import com.example.goforitGit.feature.statistics.ui.StatisticsActivity
 import com.example.goforitGit.feature.steps.viewmodel.StepViewModel
 import com.google.android.material.card.MaterialCardView
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -119,6 +123,15 @@ class StepsFragment : Fragment() {
             .setOnClickListener {
                 startActivity(PersonalChallengesActivity.createIntent(requireContext()))
             }
+
+        view.findViewById<MaterialCardView>(R.id.btnQaTesting)
+            .setOnClickListener {
+                if (QaAccess.isAuthorized(FirebaseAuth.getInstance().currentUser)) {
+                    startActivity(Intent(requireContext(), QaActivity::class.java))
+                }
+            }
+
+        updateQaEntryVisibility(view)
     }
 
     private fun updateDailyProgress(view: View, todaySteps: Int) {
@@ -210,6 +223,15 @@ class StepsFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         loadProfileAvatar()
+        view?.let(::updateQaEntryVisibility)
+    }
+
+    private fun updateQaEntryVisibility(root: View) {
+        val qaCard = root.findViewById<MaterialCardView>(R.id.btnQaTesting)
+        val authorized = QaAccess.isAuthorized(FirebaseAuth.getInstance().currentUser)
+
+        qaCard.isVisible = authorized
+        qaCard.isEnabled = authorized
     }
 
     private fun loadProfileAvatar() {

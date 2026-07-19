@@ -1,9 +1,11 @@
 package com.example.goforitGit.feature.leaderboard.ui
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
 import android.widget.Button
 import android.widget.ProgressBar
@@ -11,15 +13,20 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.feature.leaderboard.model.LeaderboardEntry
+import com.example.goforitGit.feature.qa.QaAccess
 import com.example.goforitGit.navigation.DrawerNavigator
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.datepicker.CalendarConstraints
+import com.google.android.material.datepicker.DateValidatorPointBackward
+import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
@@ -27,13 +34,31 @@ import com.google.firebase.firestore.Query
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 
 class LeaderboardActivity : AppCompatActivity() {
 
     companion object {
         private const val EXTRA_DAY_KEY = "extra_day_key"
+        private const val EXTRA_QA_MODE = "extra_qa_mode"
+        private const val EXTRA_QA_EXPECT_EMPTY = "extra_qa_expect_empty"
+        private const val EXTRA_QA_RUN_ID = "extra_qa_run_id"
+        private const val EXTRA_QA_STARTED_AT_ELAPSED_MS = "extra_qa_started_at_elapsed_ms"
+
+        const val QA_RESULT_RUN_ID = "qa_result_run_id"
+        const val QA_RESULT_SUCCESS = "qa_result_success"
+        const val QA_RESULT_EXPECT_EMPTY = "qa_result_expect_empty"
+        const val QA_RESULT_ELAPSED_MS = "qa_result_elapsed_ms"
+        const val QA_RESULT_ENTRY_COUNT = "qa_result_entry_count"
+        const val QA_RESULT_PODIUM_COUNT = "qa_result_podium_count"
+        const val QA_RESULT_LIST_COUNT = "qa_result_list_count"
+        const val QA_RESULT_EMPTY_VISIBLE = "qa_result_empty_visible"
+        const val QA_RESULT_ERROR = "qa_result_error"
+
         private const val PAGE_SIZE = 20
 
         /** Cap on entries scanned when filtering by faculty (grouped client-side). */
@@ -62,6 +87,22 @@ class LeaderboardActivity : AppCompatActivity() {
                 }
             }
         }
+
+        fun createQaIntent(
+            context: Context,
+            dayKey: String,
+            expectEmpty: Boolean,
+            qaRunId: String,
+            startedAtElapsedMs: Long
+        ): Intent {
+            return Intent(context, LeaderboardActivity::class.java).apply {
+                putExtra(EXTRA_DAY_KEY, dayKey)
+                putExtra(EXTRA_QA_MODE, true)
+                putExtra(EXTRA_QA_EXPECT_EMPTY, expectEmpty)
+                putExtra(EXTRA_QA_RUN_ID, qaRunId)
+                putExtra(EXTRA_QA_STARTED_AT_ELAPSED_MS, startedAtElapsedMs)
+            }
+        }
     }
 
     private lateinit var cardList: View
@@ -74,6 +115,7 @@ class LeaderboardActivity : AppCompatActivity() {
     private lateinit var progressBottom: ProgressBar
     private lateinit var recyclerView: RecyclerView
 
+    private lateinit var btnSelectDate: MaterialButton
     private lateinit var btnPrevDay: Button
     private lateinit var btnToday: Button
     private lateinit var btnNextDay: Button
@@ -98,41 +140,133 @@ class LeaderboardActivity : AppCompatActivity() {
     private val firestore by lazy { FirebaseFirestore.getInstance() }
     private val auth by lazy { FirebaseAuth.getInstance() }
 
-    private var dayKey: String = ""
+    private lateinit var screenState: LeaderboardViewModel
+
+    /** Loading belongs to the current Activity instance and is reset after rotation. */
     private var isLoading = false
-    private var currentPageIndex = 0
-    private var hasNextPage = false
-    private var sortDescending = false
+
+    private var dayKey: String
+        get() = screenState.dayKey
+        set(value) { screenState.dayKey = value }
+
+    private var currentPageIndex: Int
+        get() = screenState.currentPageIndex
+        set(value) { screenState.currentPageIndex = value }
+
+    private var hasNextPage: Boolean
+        get() = screenState.hasNextPage
+        set(value) { screenState.hasNextPage = value }
+
+    private var sortDescending: Boolean
+        get() = screenState.sortDescending
+        set(value) { screenState.sortDescending = value }
 
     /** null = "All faculties" (normal paged ranking); otherwise filter players to this faculty. */
-    private var selectedFaculty: String? = null
+    private var selectedFaculty: String?
+        get() = screenState.selectedFaculty
+        set(value) { screenState.selectedFaculty = value }
 
-    private var currentPageEntriesAsc: List<LeaderboardEntry> = emptyList()
+    private var currentPageEntriesAsc: List<LeaderboardEntry>
+        get() = screenState.currentPageEntriesAsc
+        set(value) { screenState.currentPageEntriesAsc = value }
 
-    private var pendingScrollUid: String? = null
-    private var pendingScrollRank: Int? = null
+    private var pendingScrollUid: String?
+        get() = screenState.pendingScrollUid
+        set(value) { screenState.pendingScrollUid = value }
+
+    private var pendingScrollRank: Int?
+        get() = screenState.pendingScrollRank
+        set(value) { screenState.pendingScrollRank = value }
 
     /** Prevents old async username/photo loads from overwriting a newer page/day. */
-    private var profileLoadGeneration = 0
+    private var profileLoadGeneration: Int
+        get() = screenState.profileLoadGeneration
+        set(value) { screenState.profileLoadGeneration = value }
+
+    private var qaMode: Boolean
+        get() = screenState.qaMode
+        set(value) { screenState.qaMode = value }
+
+    private var qaExpectEmpty: Boolean
+        get() = screenState.qaExpectEmpty
+        set(value) { screenState.qaExpectEmpty = value }
+
+    private var qaRunId: String
+        get() = screenState.qaRunId
+        set(value) { screenState.qaRunId = value }
+
+    private var qaStartedAtElapsedMs: Long
+        get() = screenState.qaStartedAtElapsedMs
+        set(value) { screenState.qaStartedAtElapsedMs = value }
+
+    private var qaResultReported: Boolean
+        get() = screenState.qaResultReported
+        set(value) { screenState.qaResultReported = value }
+
+    private var qaInitialLoadComplete: Boolean
+        get() = screenState.qaInitialLoadComplete
+        set(value) { screenState.qaInitialLoadComplete = value }
+
+    private var qaInitialLoadSucceeded: Boolean
+        get() = screenState.qaInitialLoadSucceeded
+        set(value) { screenState.qaInitialLoadSucceeded = value }
+
+    private var qaAwaitingProfileEnrichment: Boolean
+        get() = screenState.qaAwaitingProfileEnrichment
+        set(value) { screenState.qaAwaitingProfileEnrichment = value }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
         setContentView(R.layout.feature_leaderboard_activity)
 
+        screenState = ViewModelProvider(this)[LeaderboardViewModel::class.java]
         bindViews()
+
+        val isFirstCreation = !screenState.initialized
+        if (isFirstCreation) {
+            initializeScreenStateFromIntent()
+        } else {
+            // The previous Activity instance may still have asynchronous profile
+            // work finishing. Invalidate it before rendering the retained state.
+            profileLoadGeneration++
+        }
+
+        setupRecycler()
+        setupButtons()
+        updateControls()
+        renderActivePlayers(scrollToTop = false)
+
+        if (!screenState.hasLoadedData) {
+            loadRetainedSelection(showTopLoader = true)
+        }
+    }
+
+    private fun initializeScreenStateFromIntent() {
+        qaMode = intent.getBooleanExtra(EXTRA_QA_MODE, false) &&
+                QaAccess.isAuthorized(auth.currentUser)
+        qaExpectEmpty = intent.getBooleanExtra(EXTRA_QA_EXPECT_EMPTY, false)
+        qaRunId = intent.getStringExtra(EXTRA_QA_RUN_ID).orEmpty()
+        qaStartedAtElapsedMs = intent.getLongExtra(
+            EXTRA_QA_STARTED_AT_ELAPSED_MS,
+            SystemClock.elapsedRealtime()
+        )
 
         dayKey = intent.getStringExtra(EXTRA_DAY_KEY)
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: defaultLeaderboardDayKey()
 
-        setupRecycler()
-        setupButtons()
-        updateControls()
-        renderCurrentPage(scrollToTop = true)
+        screenState.initialized = true
+    }
 
-        loadPageByIndex(0, showTopLoader = true)
+    private fun loadRetainedSelection(showTopLoader: Boolean) {
+        val faculty = selectedFaculty
+        if (faculty == null) {
+            loadPageByIndex(currentPageIndex, showTopLoader)
+        } else {
+            loadFilteredPlayers(faculty, showTopLoader)
+        }
     }
 
     private fun bindViews() {
@@ -144,6 +278,7 @@ class LeaderboardActivity : AppCompatActivity() {
         progressBottom = findViewById(R.id.progressBottom)
         recyclerView = findViewById(R.id.recyclerLeaderboard)
 
+        btnSelectDate = findViewById(R.id.btnSelectDate)
         btnPrevDay = findViewById(R.id.btnPrevDay)
         btnToday = findViewById(R.id.btnToday)
         btnNextDay = findViewById(R.id.btnNextDay)
@@ -174,10 +309,15 @@ class LeaderboardActivity : AppCompatActivity() {
     private fun setupButtons() {
         findViewById<com.google.android.material.appbar.MaterialToolbar>(R.id.toolbar)
             .setNavigationOnClickListener {
-                DrawerNavigator.open(this)
+                if (qaMode) {
+                    finish()
+                } else {
+                    DrawerNavigator.open(this)
+                }
             }
 
         btnFaculty.setOnClickListener { showFacultyChooser() }
+        btnSelectDate.setOnClickListener { showDateSelector() }
 
         btnPrevDay.setOnClickListener { changeDayBy(-1) }
         btnToday.setOnClickListener { goToToday() }
@@ -222,31 +362,62 @@ class LeaderboardActivity : AppCompatActivity() {
         return LocalDate.now(ZoneId.systemDefault()).toString()
     }
 
-    private fun changeDayBy(days: Long) {
-        val current = LocalDate.parse(dayKey)
-        val next = current.plusDays(days)
-        val today = LocalDate.parse(todayKey())
+    private fun showDateSelector() {
+        if (isLoading) return
 
-        if (next.isAfter(today)) return
+        val selectedDay = LocalDate.parse(dayKey)
+        val selectedDayUtcMillis = selectedDay
+            .atStartOfDay(ZoneOffset.UTC)
+            .toInstant()
+            .toEpochMilli()
 
-        dayKey = next.toString()
+        val constraints = CalendarConstraints.Builder()
+            // .setValidator(DateValidatorPointBackward.now()) // commented to allow future dates
+            .setOpenAt(selectedDayUtcMillis)
+            .build()
+
+        val picker = MaterialDatePicker.Builder.datePicker()
+            .setTitleText("Select leaderboard date")
+            .setSelection(selectedDayUtcMillis)
+            .setCalendarConstraints(constraints)
+            .setPositiveButtonText("View date")
+            .build()
+
+        picker.addOnPositiveButtonClickListener { selectedUtcMillis ->
+            val selectedDate = Instant.ofEpochMilli(selectedUtcMillis)
+                .atZone(ZoneOffset.UTC)
+                .toLocalDate()
+
+            selectDay(selectedDate)
+        }
+
+        picker.show(supportFragmentManager, "leaderboard_date_picker")
+    }
+
+    private fun selectDay(selectedDate: LocalDate) {
+        // val today = LocalDate.parse(todayKey()) // commented to allow future dates
+        // fif (selectedDate.isAfter(today)) return // commented to allow future dates
+        if (selectedDate.toString() == dayKey) return
+
+        dayKey = selectedDate.toString()
         currentPageIndex = 0
+        hasNextPage = false
+        currentPageEntriesAsc = emptyList()
+        screenState.hasLoadedData = false
         pendingScrollUid = null
         pendingScrollRank = null
         profileLoadGeneration++
+        renderActivePlayers(scrollToTop = false)
         reloadCurrentDay(showTopLoader = true)
     }
 
-    private fun goToToday() {
-        val today = todayKey()
-        if (dayKey == today) return
+    private fun changeDayBy(days: Long) {
+        val next = LocalDate.parse(dayKey).plusDays(days)
+        selectDay(next)
+    }
 
-        dayKey = today
-        currentPageIndex = 0
-        pendingScrollUid = null
-        pendingScrollRank = null
-        profileLoadGeneration++
-        reloadCurrentDay(showTopLoader = true)
+    private fun goToToday() {
+        selectDay(LocalDate.parse(todayKey()))
     }
 
     private fun refreshCurrentPage() {
@@ -309,11 +480,16 @@ class LeaderboardActivity : AppCompatActivity() {
         if (selectedFaculty == normalized) return
 
         selectedFaculty = normalized
+        currentPageIndex = 0
+        hasNextPage = false
+        currentPageEntriesAsc = emptyList()
+        screenState.hasLoadedData = false
         profileLoadGeneration++
         pendingScrollUid = null
         pendingScrollRank = null
 
         updateFacultyButtonLabel()
+        renderActivePlayers(scrollToTop = false)
         reloadPlayers(showTopLoader = true)
         updateControls()
     }
@@ -346,6 +522,7 @@ class LeaderboardActivity : AppCompatActivity() {
                     all.filter { normalizeFaculty(it.faculty) == requestedFaculty }
                 currentPageIndex = 0
                 hasNextPage = false
+                screenState.hasLoadedData = true
 
                 renderFilteredPlayers(scrollToTop = true)
                 enrichCurrentPageWithPublicProfiles(
@@ -449,10 +626,13 @@ class LeaderboardActivity : AppCompatActivity() {
                 val pageDocs = docsWithPeek.take(PAGE_SIZE)
                 currentPageEntriesAsc = pageDocs.mapNotNull { it.toLeaderboardEntryOrNull() }
                 currentPageIndex = pageIndex
+                screenState.hasLoadedData = true
 
                 renderCurrentPage(scrollToTop = true)
                 handlePendingScrollIfNeeded()
-                enrichCurrentPageWithPublicProfiles(
+
+                qaInitialLoadSucceeded = qaMode && pageIndex == 0
+                qaAwaitingProfileEnrichment = enrichCurrentPageWithPublicProfiles(
                     entriesSnapshot = currentPageEntriesAsc,
                     expectedDayKey = requestedDayKey,
                     expectedPageIndex = pageIndex
@@ -464,12 +644,21 @@ class LeaderboardActivity : AppCompatActivity() {
                     "Failed to load leaderboard: ${e.message}",
                     Toast.LENGTH_LONG
                 ).show()
+
+                if (qaMode && pageIndex == 0) {
+                    reportQaFailure(e.message ?: "Leaderboard request failed.")
+                }
             }
             .addOnCompleteListener {
                 isLoading = false
                 progressTop.visibility = View.GONE
                 progressBottom.visibility = View.GONE
                 updateControls()
+
+                if (qaMode && pageIndex == 0) {
+                    qaInitialLoadComplete = true
+                    maybeReportQaResult()
+                }
             }
     }
 
@@ -477,47 +666,57 @@ class LeaderboardActivity : AppCompatActivity() {
         entriesSnapshot: List<LeaderboardEntry>,
         expectedDayKey: String,
         expectedPageIndex: Int
-    ) {
+    ): Boolean {
         val targets = entriesSnapshot
             .filter { it.uid.isNotBlank() }
             .filter { it.username.isBlank() || it.profileImageUrl.isBlank() || it.faculty.isBlank() }
             .distinctBy { it.uid }
 
-        if (targets.isEmpty()) return
+        if (targets.isEmpty()) return false
 
         val generation = ++profileLoadGeneration
 
         lifecycleScope.launch {
-            val profilesByUid = targets
-                .map { entry ->
-                    async {
-                        FirebaseServerApi.getPublicUserProfileResult(entry.uid).getOrNull()
+            try {
+                val profilesByUid = targets
+                    .map { entry ->
+                        async {
+                            FirebaseServerApi.getPublicUserProfileResult(entry.uid).getOrNull()
+                        }
                     }
+                    .awaitAll()
+                    .filterNotNull()
+                    .associateBy { it.uid }
+
+                if (generation != profileLoadGeneration) return@launch
+                if (dayKey != expectedDayKey || currentPageIndex != expectedPageIndex) return@launch
+
+                if (profilesByUid.isNotEmpty()) {
+                    currentPageEntriesAsc = currentPageEntriesAsc.map { entry ->
+                        val profile = profilesByUid[entry.uid]
+                        if (profile == null) {
+                            entry
+                        } else {
+                            entry.copy(
+                                username = profile.username.ifBlank { entry.username },
+                                profileImageUrl = profile.profileImageUrl.ifBlank { entry.profileImageUrl },
+                                faculty = profile.faculty.ifBlank { entry.faculty }
+                            )
+                        }
+                    }
+
+                    renderActivePlayers(scrollToTop = false)
+                    updateControls()
                 }
-                .awaitAll()
-                .filterNotNull()
-                .associateBy { it.uid }
-
-            if (generation != profileLoadGeneration) return@launch
-            if (dayKey != expectedDayKey || currentPageIndex != expectedPageIndex) return@launch
-            if (profilesByUid.isEmpty()) return@launch
-
-            currentPageEntriesAsc = currentPageEntriesAsc.map { entry ->
-                val profile = profilesByUid[entry.uid]
-                if (profile == null) {
-                    entry
-                } else {
-                    entry.copy(
-                        username = profile.username.ifBlank { entry.username },
-                        profileImageUrl = profile.profileImageUrl.ifBlank { entry.profileImageUrl },
-                        faculty = profile.faculty.ifBlank { entry.faculty }
-                    )
+            } finally {
+                if (qaMode && expectedPageIndex == 0) {
+                    qaAwaitingProfileEnrichment = false
+                    maybeReportQaResult()
                 }
             }
-
-            renderActivePlayers(scrollToTop = false)
-            updateControls()
         }
+
+        return true
     }
 
     private fun renderCurrentPage(scrollToTop: Boolean) {
@@ -685,7 +884,10 @@ class LeaderboardActivity : AppCompatActivity() {
 
         val today = LocalDate.parse(todayKey())
         val selectedDay = LocalDate.parse(dayKey)
+        val dateLabelFormatter = DateTimeFormatter.ofPattern("EEE, MMM d, yyyy")
 
+        btnSelectDate.text = selectedDay.format(dateLabelFormatter)
+        btnSelectDate.isEnabled = !isLoading
         btnPrevDay.isEnabled = !isLoading
         btnToday.isEnabled = !isLoading && selectedDay != today
         btnNextDay.isEnabled = !isLoading && selectedDay.isBefore(today)
@@ -812,6 +1014,118 @@ class LeaderboardActivity : AppCompatActivity() {
 
         pendingScrollUid = null
         pendingScrollRank = null
+    }
+
+    private fun maybeReportQaResult() {
+        if (!qaMode || qaResultReported) return
+        if (!qaInitialLoadComplete || !qaInitialLoadSucceeded) return
+        if (qaAwaitingProfileEnrichment) return
+
+        recyclerView.post {
+            if (!qaResultReported) {
+                reportQaResult()
+            }
+        }
+    }
+
+    private fun reportQaResult() {
+        if (!qaMode || qaResultReported) return
+        qaResultReported = true
+
+        val elapsedMs = (SystemClock.elapsedRealtime() - qaStartedAtElapsedMs)
+            .coerceAtLeast(0L)
+        val entryCount = currentPageEntriesAsc.size
+        val podiumCount = podiumEntriesForCurrentPage().size
+        val listCount = recyclerEntriesForCurrentPage().size
+        val emptyVisible = tvEmpty.visibility == View.VISIBLE
+
+        val structureOk = if (qaExpectEmpty) {
+            entryCount == 0 && podiumCount == 0 && listCount == 0 && emptyVisible
+        } else {
+            entryCount == PAGE_SIZE &&
+                    podiumCount == 3 &&
+                    listCount == PAGE_SIZE - 3 &&
+                    !emptyVisible
+        }
+
+        val underFiveSeconds = elapsedMs < 5_000L
+        val success = if (qaExpectEmpty) {
+            structureOk
+        } else {
+            structureOk && underFiveSeconds
+        }
+
+        val error = when {
+            success -> ""
+            qaExpectEmpty && !structureOk ->
+                "Expected a valid empty state, but the screen structure did not match."
+            !qaExpectEmpty && entryCount != PAGE_SIZE ->
+                "Expected 20 entries, but rendered $entryCount. Use a day with at least 20 ranked users."
+            !qaExpectEmpty && (podiumCount != 3 || listCount != PAGE_SIZE - 3) ->
+                "Expected 3 podium entries and 17 list entries."
+            !qaExpectEmpty && !underFiveSeconds ->
+                "The complete first page took 5 seconds or longer."
+            else -> "Leaderboard QA acceptance criteria were not satisfied."
+        }
+
+        val resultIntent = Intent().apply {
+            putExtra(QA_RESULT_RUN_ID, qaRunId)
+            putExtra(QA_RESULT_SUCCESS, success)
+            putExtra(QA_RESULT_EXPECT_EMPTY, qaExpectEmpty)
+            putExtra(QA_RESULT_ELAPSED_MS, elapsedMs)
+            putExtra(QA_RESULT_ENTRY_COUNT, entryCount)
+            putExtra(QA_RESULT_PODIUM_COUNT, podiumCount)
+            putExtra(QA_RESULT_LIST_COUNT, listCount)
+            putExtra(QA_RESULT_EMPTY_VISIBLE, emptyVisible)
+            putExtra(QA_RESULT_ERROR, error)
+        }
+        setResult(Activity.RESULT_OK, resultIntent)
+
+        val title = if (success) "QA result: PASS" else "QA result: FAIL"
+        val message = buildString {
+            append("Load time: ")
+            append(String.format(java.util.Locale.US, "%.2f s", elapsedMs / 1000.0))
+            append("\nEntries: $entryCount")
+            append("\nPodium: $podiumCount")
+            append("\nList rows: $listCount")
+            if (qaExpectEmpty) append("\nEmpty message visible: $emptyVisible")
+            if (error.isNotBlank()) append("\n\n$error")
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setCancelable(false)
+            .setPositiveButton("Return to QA") { _, _ -> finish() }
+            .show()
+    }
+
+    private fun reportQaFailure(error: String) {
+        if (!qaMode || qaResultReported) return
+        qaResultReported = true
+
+        val elapsedMs = (SystemClock.elapsedRealtime() - qaStartedAtElapsedMs)
+            .coerceAtLeast(0L)
+
+        val resultIntent = Intent().apply {
+            putExtra(QA_RESULT_RUN_ID, qaRunId)
+            putExtra(QA_RESULT_SUCCESS, false)
+            putExtra(QA_RESULT_EXPECT_EMPTY, qaExpectEmpty)
+            putExtra(QA_RESULT_ELAPSED_MS, elapsedMs)
+            putExtra(QA_RESULT_ENTRY_COUNT, -1)
+            putExtra(QA_RESULT_PODIUM_COUNT, -1)
+            putExtra(QA_RESULT_LIST_COUNT, -1)
+            putExtra(QA_RESULT_EMPTY_VISIBLE, false)
+            putExtra(QA_RESULT_ERROR, error)
+        }
+        setResult(Activity.RESULT_OK, resultIntent)
+
+        AlertDialog.Builder(this)
+            .setTitle("QA result: FAIL")
+            .setMessage("Leaderboard loading failed.\n\n$error")
+            .setCancelable(false)
+            .setPositiveButton("Return to QA") { _, _ -> finish() }
+            .show()
     }
 
     private fun openCompetitorProfile(entry: LeaderboardEntry) {

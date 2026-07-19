@@ -702,6 +702,85 @@
                     tools:ignore="HardcodedText" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
+        <!--  QA test center — hidden unless the exact QA Firebase account is signed in  -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/btnQaTesting"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?attr/selectableItemBackground"
+            android:visibility="gone"
+            app:cardBackgroundColor="@color/surface_white"
+            app:cardCornerRadius="@dimen/radius_tile"
+            app:cardElevation="0dp"
+            app:strokeColor="@color/brand_purple"
+            app:strokeWidth="1dp"
+            tools:visibility="visible">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="78dp"
+                android:orientation="horizontal"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="12dp">
+
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    app:cardBackgroundColor="@color/soft_lavender"
+                    app:cardCornerRadius="21dp"
+                    app:cardElevation="0dp">
+
+                    <ImageView
+                        android:layout_width="21dp"
+                        android:layout_height="21dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_statistics"
+                        app:tint="@color/brand_purple" />
+                </com.google.android.material.card.MaterialCardView>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="13dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="QA Test Center"
+                        android:textColor="@color/text_purple_dark"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        tools:ignore="HardcodedText" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="BLE, leaderboard and crash-recovery tests"
+                        android:textColor="@color/text_muted"
+                        android:textSize="11sp"
+                        tools:ignore="HardcodedText" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="›"
+                    android:textColor="@color/brand_purple"
+                    android:textSize="28sp"
+                    android:textStyle="bold"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
         <!--  Personal Challenges action  -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btnPersonalChallenges"

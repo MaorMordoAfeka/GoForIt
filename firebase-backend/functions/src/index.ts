@@ -18,6 +18,12 @@ const DEFAULT_QUIET_START_HOUR = 22;
 const DEFAULT_QUIET_END_HOUR = 8;
 const ALL_INTERVALS = [0, 1, 2, 3, 4, 5] as const;
 
+// QA-only BLE acceptance-test configuration.
+// This path never awards points and is available only to users whose Firebase
+// Auth token contains the custom claim `qaTester: true`.
+const QA_BONUS_STATION_ID = "bonus station";
+const QA_RUN_ID_PATTERN = /^[A-Za-z0-9_-]{3,80}$/;
+
 // Campus-step bonus.
 // Base activity is worth 1 point per 100 steps (see calcStepPoints), i.e. ~0.01
 // points/step. The old model awarded a FLAT 10 points for every qualified step
@@ -124,6 +130,38 @@ function validateFaculty(x: unknown): string {
   return faculty;
 }
 
+/**
+ * Returns a validated QA run ID, or null when the caller requested the normal
+ * production reward flow. Keeping this optional preserves every existing
+ * recordBonusVisit client call.
+ */
+function validateOptionalQaRunId(value: unknown): string | null {
+  if (value == null) return null;
+
+  if (typeof value !== "string") {
+    throw new HttpsError("invalid-argument", "qaRunId must be a string.");
+  }
+
+  const qaRunId = value.trim();
+  if (!QA_RUN_ID_PATTERN.test(qaRunId)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "qaRunId must be 3..80 characters using only letters, numbers, underscores, or hyphens."
+    );
+  }
+
+  return qaRunId;
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return (
+    code === 6 ||
+    code === "6" ||
+    code === "already-exists" ||
+    code === "ALREADY_EXISTS"
+  );
+}
 
 function validateUsername(x: unknown): string {
   const username = typeof x === "string" ? x.trim() : "";
@@ -1195,16 +1233,101 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
 export const recordBonusVisit = onCall({ region: FUNCTIONS_REGION }, async (request) => {
   const uid = requireUid(request);
 
-  await ensureUserDoc(uid);
-
   const stationIdRaw = request.data?.stationId as unknown;
   if (typeof stationIdRaw !== "string" || stationIdRaw.trim().length === 0) {
     throw new HttpsError("invalid-argument", "stationId is required.");
   }
   const stationId = stationIdRaw.trim();
-
-  const profile = await getUserProfile(uid);
+  const qaRunId = validateOptionalQaRunId(request.data?.qaRunId);
   const visitedAtMsRaw = request.data?.visitedAtMs as unknown;
+
+  // ---------------------------------------------------------------------------
+  // QA-only BLE acceptance-test path
+  // ---------------------------------------------------------------------------
+  // This branch is intentionally before the production reward transaction.
+  // It records one immutable evidence document and returns immediately, so it
+  // cannot change daily points, cumulative totals, personal challenges, or the
+  // leaderboard. A normal call without qaRunId continues through the unchanged
+  // production logic below.
+  if (qaRunId != null) {
+    const isQaTester = request.auth?.token?.qaTester === true;
+    if (!isQaTester) {
+      throw new HttpsError(
+        "permission-denied",
+        "QA bonus logging is allowed only for the dedicated QA account."
+      );
+    }
+
+    if (stationId !== QA_BONUS_STATION_ID) {
+      throw new HttpsError(
+        "invalid-argument",
+        `The QA BLE test accepts only stationId '${QA_BONUS_STATION_ID}'.`
+      );
+    }
+
+    // Verify that the same station configuration used by production exists.
+    const stationSnap = await db.doc(`bonus_stations/${stationId}`).get();
+    if (!stationSnap.exists) {
+      throw new HttpsError("not-found", "bonus station not found.");
+    }
+
+    const clientVisitedAtMs =
+      typeof visitedAtMsRaw === "number" &&
+      Number.isInteger(visitedAtMsRaw) &&
+      visitedAtMsRaw > 0
+        ? visitedAtMsRaw
+        : Date.now();
+
+    const qaRunRef = db
+      .collection("qa_bonus_station_runs")
+      .doc(uid)
+      .collection("runs")
+      .doc(qaRunId);
+
+    try {
+      // create() is deliberate: a reused qaRunId cannot overwrite evidence or
+      // be counted as another successful physical run.
+      await qaRunRef.create({
+        uid,
+        qaRunId,
+        stationId,
+        status: "accepted",
+        source: "android_ble_acceptance_test",
+        clientVisitedAtMs,
+        clientVisitedAt: admin.firestore.Timestamp.fromMillis(clientVisitedAtMs),
+        serverRecordedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      logger.info(`recordBonusVisit QA run accepted: ${uid}/${qaRunId}`);
+
+      return {
+        ok: true,
+        qaMode: true,
+        qaRunId,
+        stationId,
+      };
+    } catch (error) {
+      if (isAlreadyExistsError(error)) {
+        logger.warn(`recordBonusVisit QA run reused: ${uid}/${qaRunId}`);
+        return {
+          ok: false,
+          qaMode: true,
+          qaRunId,
+          stationId,
+          reason: "duplicate_qa_run",
+        };
+      }
+
+      logger.error(`recordBonusVisit QA write failed: ${uid}/${qaRunId}`, error);
+      throw new HttpsError("internal", "Failed to store the QA BLE test result.");
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Existing production reward flow — unchanged
+  // ---------------------------------------------------------------------------
+  await ensureUserDoc(uid);
+  const profile = await getUserProfile(uid);
 
   const visitedDt =
     typeof visitedAtMsRaw === "number" && Number.isInteger(visitedAtMsRaw)
@@ -1286,7 +1409,6 @@ export const recordBonusVisit = onCall({ region: FUNCTIONS_REGION }, async (requ
       logger.error(`recordBonusVisit: leaderboard recalculation failed for ${dayKey}`, err);
     }
   }
-
 
   // A verified station visit may satisfy an active Campus Explorer challenge.
   try {

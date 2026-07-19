@@ -80,6 +80,29 @@
                         android:text="Page 1"
                         android:textColor="#FFFFFF"
                         android:textSize="14sp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnSelectDate"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="50dp"
+                        android:layout_marginTop="16dp"
+                        android:backgroundTint="#FFFFFF"
+                        android:contentDescription="Select leaderboard date"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:text="Select date"
+                        android:textAllCaps="false"
+                        android:textColor="@color/brand_purple"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="16dp"
+                        app:icon="@android:drawable/ic_menu_my_calendar"
+                        app:iconGravity="textStart"
+                        app:iconPadding="10dp"
+                        app:iconTint="@color/brand_purple"
+                        app:strokeColor="#FFFFFF"
+                        app:strokeWidth="1dp" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

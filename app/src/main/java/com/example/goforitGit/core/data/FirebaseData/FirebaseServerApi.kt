@@ -48,6 +48,8 @@ object FirebaseServerApi {
     const val DEFAULT_QUIET_HOURS_START = 22
     const val DEFAULT_QUIET_HOURS_END = 8
 
+    private val QA_RUN_ID_REGEX = Regex("^[A-Za-z0-9_-]{3,80}$")
+
     /** Cloud Functions entry point bound to the chosen region. */
     private val functions: FirebaseFunctions by lazy { Firebase.functions(FUNCTIONS_REGION) }
     private val storage: FirebaseStorage by lazy { FirebaseStorage.getInstance() }
@@ -460,23 +462,39 @@ object FirebaseServerApi {
     /**
      * Records a bonus station visit on the server after BLE validation.
      *
-     * Verify in Firestore:
+     * Production calls omit [qaRunId] and preserve the existing reward flow:
      * users/{uid}/bonus_visits/{dayKey}
      * users/{uid}/daily/{dayKey}
+     *
+     * QA acceptance calls provide a unique [qaRunId]. The Cloud Function then
+     * verifies the `qaTester` custom claim and writes evidence only under
+     * qa_bonus_station_runs/{uid}/runs/{qaRunId}; it does not award points.
      */
     suspend fun recordBonusVisitResult(
         stationId: String,
         visitedAtMs: Long = System.currentTimeMillis(),
+        qaRunId: String? = null,
     ): Result<Boolean> {
         val uidCheck = requireUid()
         if (uidCheck.isFailure) {
             return Result.failure(uidCheck.exceptionOrNull()!!)
         }
 
-        val data = mapOf(
+        val data = hashMapOf<String, Any?>(
             "stationId" to stationId,
             "visitedAtMs" to visitedAtMs,
         )
+
+        qaRunId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { normalizedRunId ->
+                require(QA_RUN_ID_REGEX.matches(normalizedRunId)) {
+                    "qaRunId must be 3..80 characters using only letters, numbers, underscores, or hyphens."
+                }
+                data["qaRunId"] = normalizedRunId
+            }
+
         return callOkResult("recordBonusVisit", data)
     }
 
