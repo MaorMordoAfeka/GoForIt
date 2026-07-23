@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,8 +23,10 @@ import androidx.navigation.ui.navigateUp
 import androidx.navigation.ui.setupActionBarWithNavController
 import androidx.navigation.ui.setupWithNavController
 import com.example.goforitGit.R
+import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.core.service.BleAdvertScanService
 import com.example.goforitGit.core.service.StepService
+import com.example.goforitGit.core.util.DeviceSecurity.DeviceIdentity
 import com.example.goforitGit.core.util.FourHourBuckets.FourHourUploadScheduler
 import com.example.goforitGit.core.util.TrackingLifecycle.OnboardingPrefs
 import com.example.goforitGit.core.util.TrackingLifecycle.TrackingPermissions
@@ -695,11 +698,47 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Defense-in-depth re-check for multi-device concurrent login detection:
+     * hiding the "how to get in" entry point (the login screen) is not the
+     * only protection, so this also re-checks on every MainActivity launch
+     * whether this device is still the account's trusted device. If the
+     * account logged in elsewhere and completed 2FA there, this device's
+     * trust was replaced — sign it out instead of letting it keep using the
+     * app silently. See FirebaseServerApi's DEVICE TRUST section.
+     *
+     * Fails open on a network/server error: a transient hiccup on this
+     * re-check should never sign out a user who is otherwise still validly
+     * logged in.
+     */
+    private fun verifyDeviceTrustOrSignOut() {
+        lifecycleScope.launch {
+            val deviceId = DeviceIdentity.getOrCreateDeviceId(this@MainActivity)
+            val result = FirebaseServerApi.checkDeviceStillTrustedResult(deviceId)
+
+            result.onFailure { e ->
+                Log.e("AUTH", "checkDeviceStillTrusted failed, failing open: ${e.message}", e)
+            }
+
+            val trusted = result.getOrNull() ?: return@launch
+            if (!trusted) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "You were signed out because your account was used to sign in on another device.",
+                    Toast.LENGTH_LONG
+                ).show()
+                signOutAndGoToLogin()
+            }
+        }
+    }
+
     // ---- Lifecycle ----
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.nav_main)
+
+        verifyDeviceTrustOrSignOut()
 
         FourHourUploadScheduler.scheduleNext(this)
 

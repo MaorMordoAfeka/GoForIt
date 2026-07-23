@@ -1,5 +1,6 @@
 // functions/src/index.ts
 import * as admin from "firebase-admin";
+import * as crypto from "crypto";
 import { DateTime, IANAZone } from "luxon";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
@@ -888,6 +889,224 @@ export const registerFcmToken = onCall({ region: FUNCTIONS_REGION }, async (requ
   );
 
   return { ok: true };
+});
+
+// -----------------------------------------------------------------------------
+// Multi-device concurrent login detection (2FA + login blocking)
+// -----------------------------------------------------------------------------
+//
+// One "trusted device" per user at a time, tracked in the server-only doc
+// users/{uid}/security/deviceTrust (see firestore.rules — clients cannot
+// write this directly, only through the callables below). A user's first
+// login ever, or a repeat login from the same device, trusts silently and
+// changes nothing about today's login experience. A login attempt from a
+// second device is blocked client-side until a 6-digit code — pushed via FCM
+// to the already-trusted device, reusing the existing fcm_tokens/messaging
+// pipeline — is confirmed here.
+
+const DEVICE_VERIFICATION_TTL_MINUTES = 5;
+const DEVICE_VERIFICATION_MAX_ATTEMPTS = 5;
+
+function requireDeviceId(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim().length < 8 || raw.trim().length > 128) {
+    throw new HttpsError("invalid-argument", "deviceId is required.");
+  }
+  return raw.trim();
+}
+
+function normalizeDeviceName(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim().length === 0) return "Unknown device";
+  return raw.trim().slice(0, 80);
+}
+
+type DeviceTrustData = {
+  trustedDeviceId: string | null;
+  trustedDeviceName: string | null;
+  trustedDeviceSince: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
+};
+
+// -----------------------------------------------------------------------------
+// Callable: checkDeviceTrust
+// -----------------------------------------------------------------------------
+
+export const checkDeviceTrust = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+  await ensureUserDoc(uid);
+
+  const deviceId = requireDeviceId(request.data?.deviceId);
+  const deviceName = normalizeDeviceName(request.data?.deviceName);
+
+  const trustRef = db.doc(`users/${uid}/security/deviceTrust`);
+  const trustSnap = await trustRef.get();
+  const trustData = (trustSnap.data() ?? {}) as Partial<DeviceTrustData>;
+  const trustedDeviceId =
+    typeof trustData.trustedDeviceId === "string" ? trustData.trustedDeviceId : null;
+
+  if (trustedDeviceId === null || trustedDeviceId === deviceId) {
+    await trustRef.set(
+      {
+        trustedDeviceId: deviceId,
+        trustedDeviceName: deviceName,
+        trustedDeviceSince: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { ok: true, status: "trusted" };
+  }
+
+  // A different device already holds this account's trust: require a code
+  // sent to that device before letting this one in.
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const expiresAt = admin.firestore.Timestamp.fromMillis(
+    Date.now() + DEVICE_VERIFICATION_TTL_MINUTES * 60_000
+  );
+  const verificationRef = db.collection(`users/${uid}/login_verifications`).doc();
+
+  await verificationRef.set({
+    code,
+    requestingDeviceId: deviceId,
+    requestingDeviceName: deviceName,
+    status: "pending",
+    attempts: 0,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt,
+  });
+
+  const tokensSnap = await db.collection(`users/${uid}/fcm_tokens`).get();
+  const tokens = tokensSnap.docs.map((d) => d.id);
+
+  if (tokens.length > 0) {
+    try {
+      const res = await messaging.sendEachForMulticast({
+        tokens,
+        notification: {
+          title: "New sign-in attempt",
+          body: `"${deviceName}" is trying to sign in. Code: ${code}. Not you? Ignore this.`,
+        },
+        data: {
+          type: "LOGIN_VERIFICATION",
+          code,
+          requestingDeviceName: deviceName,
+        },
+      });
+
+      const toDelete: string[] = [];
+      res.responses.forEach((r, idx) => {
+        if (!r.success) {
+          const errCode = (r.error as { code?: string } | undefined)?.code ?? "";
+          if (isTokenInvalid(errCode)) toDelete.push(tokens[idx]);
+        }
+      });
+
+      if (toDelete.length > 0) {
+        const delBatch = db.batch();
+        toDelete.forEach((t) => delBatch.delete(db.doc(`users/${uid}/fcm_tokens/${t}`)));
+        await delBatch.commit();
+      }
+    } catch (err) {
+      logger.error(`checkDeviceTrust: failed to push verification code for ${uid}`, err);
+    }
+  }
+
+  return {
+    ok: true,
+    status: "verification_required",
+    verificationId: verificationRef.id,
+    expiresAtMs: expiresAt.toMillis(),
+    hasTrustedDeviceToken: tokens.length > 0,
+  };
+});
+
+// -----------------------------------------------------------------------------
+// Callable: confirmLoginVerification
+// -----------------------------------------------------------------------------
+
+export const confirmLoginVerification = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+
+  const verificationIdRaw = request.data?.verificationId;
+  if (typeof verificationIdRaw !== "string" || verificationIdRaw.trim().length === 0) {
+    throw new HttpsError("invalid-argument", "verificationId is required.");
+  }
+  const verificationId = verificationIdRaw.trim();
+
+  const codeInput = request.data?.code;
+  if (typeof codeInput !== "string" || !/^\d{6}$/.test(codeInput.trim())) {
+    throw new HttpsError("invalid-argument", "code must be a 6-digit number.");
+  }
+  const code = codeInput.trim();
+
+  const verificationRef = db.doc(`users/${uid}/login_verifications/${verificationId}`);
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(verificationRef);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Verification request not found.");
+    }
+
+    const data = snap.data() as Record<string, unknown>;
+    const status = typeof data.status === "string" ? data.status : "pending";
+    const attempts = typeof data.attempts === "number" ? data.attempts : 0;
+    const expiresAt = data.expiresAt as admin.firestore.Timestamp | undefined;
+    const storedCode = typeof data.code === "string" ? data.code : "";
+
+    if (status !== "pending") {
+      return { ok: true, status: "expired" };
+    }
+    if (!expiresAt || expiresAt.toMillis() < Date.now()) {
+      tx.set(verificationRef, { status: "expired" }, { merge: true });
+      return { ok: true, status: "expired" };
+    }
+    if (attempts >= DEVICE_VERIFICATION_MAX_ATTEMPTS) {
+      tx.set(verificationRef, { status: "expired" }, { merge: true });
+      return { ok: true, status: "expired" };
+    }
+
+    if (code !== storedCode) {
+      const attemptsUsed = attempts + 1;
+      tx.set(verificationRef, { attempts: attemptsUsed }, { merge: true });
+      return {
+        ok: true,
+        status: "invalid_code",
+        attemptsRemaining: Math.max(0, DEVICE_VERIFICATION_MAX_ATTEMPTS - attemptsUsed),
+      };
+    }
+
+    const requestingDeviceId =
+      typeof data.requestingDeviceId === "string" ? data.requestingDeviceId : "";
+    const requestingDeviceName =
+      typeof data.requestingDeviceName === "string" ? data.requestingDeviceName : "Unknown device";
+
+    tx.set(
+      db.doc(`users/${uid}/security/deviceTrust`),
+      {
+        trustedDeviceId: requestingDeviceId,
+        trustedDeviceName: requestingDeviceName,
+        trustedDeviceSince: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    tx.set(verificationRef, { status: "confirmed" }, { merge: true });
+
+    return { ok: true, status: "trusted" };
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Callable: checkDeviceStillTrusted
+// -----------------------------------------------------------------------------
+
+export const checkDeviceStillTrusted = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+  const deviceId = requireDeviceId(request.data?.deviceId);
+
+  const trustSnap = await db.doc(`users/${uid}/security/deviceTrust`).get();
+  const trustData = (trustSnap.data() ?? {}) as Partial<DeviceTrustData>;
+  const trustedDeviceId =
+    typeof trustData.trustedDeviceId === "string" ? trustData.trustedDeviceId : null;
+
+  const trusted = trustedDeviceId === null || trustedDeviceId === deviceId;
+  return { ok: true, trusted };
 });
 
 // -----------------------------------------------------------------------------

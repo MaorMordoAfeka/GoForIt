@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
+import com.example.goforitGit.core.util.DeviceSecurity.DeviceIdentity
 import com.example.goforitGit.databinding.FeatureAuthRegisterBinding
 import com.example.goforitGit.navigation.MainActivity
 import com.google.firebase.Firebase
@@ -101,12 +102,37 @@ class RegisterActivity : AppCompatActivity() {
                         Log.e("FCM", "Token register failed: ${e.message}", e)
                     }
 
+                seedDeviceTrustSafely()
                 goToMain()
             } finally {
                 setLoading(false)
                 registerInFlight.set(false)
             }
         }
+    }
+
+    /**
+     * Records this device as the account's trusted device right after
+     * registration. A brand-new account always trusts silently (there's no
+     * prior device to conflict with) — this just makes sure the trust record
+     * exists from the start, so the very next login from a different device
+     * is challenged instead of slipping in unchallenged. See
+     * FirebaseServerApi's DEVICE TRUST section for the full flow.
+     */
+    private suspend fun seedDeviceTrustSafely() {
+        val deviceId = DeviceIdentity.getOrCreateDeviceId(this)
+        val deviceName = DeviceIdentity.getDeviceName()
+
+        runCatching { FirebaseServerApi.checkDeviceTrustResult(deviceId, deviceName) }
+            .getOrNull()
+            ?.onSuccess { check ->
+                if (check.status != "trusted") {
+                    Log.e("AUTH", "Unexpected device trust status right after registration: ${check.status}")
+                }
+            }
+            ?.onFailure { e ->
+                Log.e("AUTH", "seedDeviceTrust failed: ${e.message}", e)
+            }
     }
 
     private fun clearErrors() {

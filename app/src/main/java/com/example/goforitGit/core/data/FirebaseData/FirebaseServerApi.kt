@@ -30,6 +30,9 @@ import kotlin.collections.get
  *    - syncCollegeAreaSteps
  *    - getMyPersonalChallenges
  *    - acceptPersonalChallenge
+ *    - checkDeviceTrust
+ *    - confirmLoginVerification
+ *    - checkDeviceStillTrusted
  * 3) Providing small helpers for current dayKey + current 4-hour interval
  *
  * Not responsible for:
@@ -132,6 +135,153 @@ object FirebaseServerApi {
         val result = Firebase.auth.createUserWithEmailAndPassword(email, password).await()
         val user = result.user ?: error("Register succeeded but FirebaseUser is null.")
         AuthInfo(uid = user.uid, email = user.email)
+    }
+
+    // -------------------------------------------------------------------------
+    // DEVICE TRUST (multi-device concurrent login detection: 2FA + blocking)
+    // -------------------------------------------------------------------------
+    //
+    // One trusted device per account at a time. The first login ever, or a
+    // repeat login from the same device, trusts silently — this never changes
+    // behavior for today's single-device flow. A login from a second device
+    // gets "verification_required": a 6-digit code is pushed via FCM to the
+    // already-trusted device, and the new device must be blocked from the app
+    // until confirmLoginVerificationResult() succeeds.
+
+    /**
+     * Result of checking whether this device is trusted for the signed-in account.
+     *
+     * status:
+     * - "trusted"               -> proceed into the app normally.
+     * - "verification_required" -> block here; a code was pushed (if
+     *   [hasTrustedDeviceToken] is true) to the account's existing trusted
+     *   device. Collect it via confirmLoginVerificationResult().
+     */
+    data class DeviceTrustCheck(
+        val status: String,
+        val verificationId: String?,
+        val expiresAtMs: Long?,
+        val hasTrustedDeviceToken: Boolean,
+    )
+
+    /**
+     * Result of submitting a verification code.
+     *
+     * status:
+     * - "trusted"      -> code accepted; this device is now the trusted device.
+     * - "invalid_code" -> wrong code; [attemptsRemaining] tells the user how many tries are left.
+     * - "expired"      -> too old or too many wrong attempts; restart from checkDeviceTrustResult().
+     */
+    data class DeviceVerificationResult(
+        val status: String,
+        val attemptsRemaining: Int?,
+    )
+
+    /**
+     * Checks whether [deviceId] is the trusted device for the signed-in account.
+     *
+     * Expected callable: checkDeviceTrust
+     */
+    suspend fun checkDeviceTrustResult(
+        deviceId: String,
+        deviceName: String,
+    ): Result<DeviceTrustCheck> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            require(deviceId.isNotBlank()) { "deviceId is required." }
+
+            val payload = mapOf(
+                "deviceId" to deviceId,
+                "deviceName" to deviceName,
+            )
+
+            val res = functions.getHttpsCallable("checkDeviceTrust").call(payload).await()
+            val map = res.data as? Map<*, *> ?: error("checkDeviceTrust returned invalid payload.")
+
+            val ok = map["ok"] as? Boolean ?: false
+            if (!ok) error("checkDeviceTrust returned ok=false.")
+
+            DeviceTrustCheck(
+                status = map["status"] as? String ?: error("checkDeviceTrust response missing status."),
+                verificationId = map["verificationId"] as? String,
+                expiresAtMs = (map["expiresAtMs"] as? Number)?.toLong(),
+                hasTrustedDeviceToken = map["hasTrustedDeviceToken"] as? Boolean ?: true,
+            )
+        }
+    }
+
+    /**
+     * Submits a 2FA code to confirm this device's login after
+     * checkDeviceTrustResult() returned "verification_required".
+     *
+     * Expected callable: confirmLoginVerification
+     */
+    suspend fun confirmLoginVerificationResult(
+        verificationId: String,
+        code: String,
+    ): Result<DeviceVerificationResult> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            require(verificationId.isNotBlank()) { "verificationId is required." }
+            require(Regex("^\\d{6}$").matches(code)) { "code must be 6 digits." }
+
+            val payload = mapOf(
+                "verificationId" to verificationId,
+                "code" to code,
+            )
+
+            val res = functions.getHttpsCallable("confirmLoginVerification").call(payload).await()
+            val map = res.data as? Map<*, *>
+                ?: error("confirmLoginVerification returned invalid payload.")
+
+            val ok = map["ok"] as? Boolean ?: false
+            if (!ok) error("confirmLoginVerification returned ok=false.")
+
+            DeviceVerificationResult(
+                status = map["status"] as? String
+                    ?: error("confirmLoginVerification response missing status."),
+                attemptsRemaining = (map["attemptsRemaining"] as? Number)?.toInt(),
+            )
+        }
+    }
+
+    /**
+     * Defense-in-depth re-check: confirms [deviceId] is still the trusted
+     * device for the signed-in account. Call this from screens reached after
+     * login (e.g. on app launch) so a device that gets replaced as the
+     * trusted device — because the account logged in elsewhere and completed
+     * 2FA — gets signed out instead of continuing to use the app silently.
+     *
+     * Expected callable: checkDeviceStillTrusted
+     */
+    suspend fun checkDeviceStillTrustedResult(deviceId: String): Result<Boolean> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            require(deviceId.isNotBlank()) { "deviceId is required." }
+
+            val res = functions.getHttpsCallable("checkDeviceStillTrusted")
+                .call(mapOf("deviceId" to deviceId))
+                .await()
+            val map = res.data as? Map<*, *>
+                ?: error("checkDeviceStillTrusted returned invalid payload.")
+
+            val ok = map["ok"] as? Boolean ?: false
+            if (!ok) error("checkDeviceStillTrusted returned ok=false.")
+
+            map["trusted"] as? Boolean ?: true
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
+import com.example.goforitGit.core.util.DeviceSecurity.DeviceIdentity
 import com.example.goforitGit.databinding.FeatureAuthLoginBinding
 import com.example.goforitGit.navigation.MainActivity
 import com.google.firebase.Firebase
@@ -120,7 +121,7 @@ class LoginActivity : AppCompatActivity() {
                 Firebase.auth.currentUser?.let { existing ->
                     Log.d("AUTH", "Already logged in: uid=${existing.uid}")
                     registerFcmTokenSafely()
-                    goToMain()
+                    proceedAfterAuth()
                     return@launch
                 }
 
@@ -149,11 +150,64 @@ class LoginActivity : AppCompatActivity() {
                 Log.d("AUTH", "Logged in: uid=${user.uid}")
 
                 registerFcmTokenSafely()
-                goToMain()
+                proceedAfterAuth()
 
             } finally {
                 setLoading(false)
                 loginInFlight.set(false)
+            }
+        }
+    }
+
+    /**
+     * Checks whether this device is trusted for the signed-in account and
+     * routes accordingly: straight into the app if trusted, or into the
+     * blocking 2FA screen if the account is already active on a different
+     * device. See FirebaseServerApi's DEVICE TRUST section for the full flow.
+     *
+     * Fails open on a network/server error: a hiccup in this new check should
+     * never strand a user who already presented valid credentials out of the
+     * app entirely.
+     */
+    private suspend fun proceedAfterAuth() {
+        val deviceId = DeviceIdentity.getOrCreateDeviceId(this)
+        val deviceName = DeviceIdentity.getDeviceName()
+
+        val trustCheck = FirebaseServerApi.checkDeviceTrustResult(deviceId, deviceName)
+
+        trustCheck.onFailure { e ->
+            Log.e("AUTH", "checkDeviceTrust failed, failing open: ${e.message}", e)
+            goToMain()
+        }
+
+        val check = trustCheck.getOrNull() ?: return
+
+        when (check.status) {
+            "trusted" -> goToMain()
+
+            "verification_required" -> {
+                if (!check.hasTrustedDeviceToken) {
+                    Toast.makeText(
+                        this,
+                        "Your account is active on another device, but we couldn't reach it " +
+                            "to send a code. Open GoForIt on that device first, then try again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
+                }
+
+                val intent = Intent(this, LoginVerificationActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    putExtra(LoginVerificationActivity.EXTRA_VERIFICATION_ID, check.verificationId)
+                    putExtra(LoginVerificationActivity.EXTRA_EXPIRES_AT_MS, check.expiresAtMs ?: 0L)
+                }
+                startActivity(intent)
+                finish()
+            }
+
+            else -> {
+                Log.e("AUTH", "Unexpected device trust status: ${check.status}")
+                goToMain()
             }
         }
     }
