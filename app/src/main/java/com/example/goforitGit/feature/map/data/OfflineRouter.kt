@@ -785,7 +785,12 @@ class OfflineRouter(private val ctx: Context) {
      */
     private fun computeCategoryWeight(value: Double, maxPref: Double, total: Double): Double {
         // How close is this value to the max?
-        val relativeToMax = if (maxPref > 0.001) value / maxPref else 1.0
+        // Note: when maxPref is ~0 (every slider dragged to zero), there is no
+        // "preferred" category at all — this must fall back to 0.0 (nothing
+        // preferred), not 1.0. Falling back to 1.0 was the bug: it made
+        // "all sliders at zero" secretly behave like "all sliders maxed",
+        // since every category would cross the isPreferred threshold below.
+        val relativeToMax = if (maxPref > 0.001) value / maxPref else 0.0
 
         // Base weight from the slider value itself (0 to 1 range)
         val baseWeight = value
