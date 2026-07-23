@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
+import com.example.goforitGit.core.util.DeviceSecurity.DeviceIdentity
 import com.example.goforitGit.databinding.FeatureAuthLoginBinding
 import com.example.goforitGit.navigation.MainActivity
 import com.google.firebase.Firebase
@@ -120,7 +121,7 @@ class LoginActivity : AppCompatActivity() {
                 Firebase.auth.currentUser?.let { existing ->
                     Log.d("AUTH", "Already logged in: uid=${existing.uid}")
                     registerFcmTokenSafely()
-                    goToMain()
+                    proceedAfterAuth()
                     return@launch
                 }
 
@@ -149,12 +150,51 @@ class LoginActivity : AppCompatActivity() {
                 Log.d("AUTH", "Logged in: uid=${user.uid}")
 
                 registerFcmTokenSafely()
-                goToMain()
+                proceedAfterAuth()
 
             } finally {
                 setLoading(false)
                 loginInFlight.set(false)
             }
+        }
+    }
+
+    /**
+     * Checks whether this device is allowed to be the account's active
+     * device and routes accordingly. If a different device already holds
+     * the account's trust, this device is refused: it signs back out of
+     * Firebase Auth immediately (so a relaunch of the app can't slip past
+     * this check via LoginActivity's auto-login branch) and shows an error
+     * instead of entering the app. See FirebaseServerApi's DEVICE TRUST
+     * section for the full flow.
+     *
+     * Fails open on a network/server error: a hiccup in this new check should
+     * never strand a user who already presented valid credentials out of the
+     * app entirely.
+     */
+    private suspend fun proceedAfterAuth() {
+        val deviceId = DeviceIdentity.getOrCreateDeviceId(this)
+        val deviceName = DeviceIdentity.getDeviceName()
+
+        val trustCheck = FirebaseServerApi.checkDeviceTrustResult(deviceId, deviceName)
+
+        trustCheck.onFailure { e ->
+            Log.e("AUTH", "checkDeviceTrust failed, failing open: ${e.message}", e)
+            goToMain()
+        }
+
+        val check = trustCheck.getOrNull() ?: return
+
+        if (check.allowed) {
+            goToMain()
+        } else {
+            Firebase.auth.signOut()
+            Toast.makeText(
+                this,
+                "This account is already signed in on another device. Sign out there first, " +
+                    "then try again here.",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 

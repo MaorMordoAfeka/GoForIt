@@ -30,6 +30,8 @@ import kotlin.collections.get
  *    - syncCollegeAreaSteps
  *    - getMyPersonalChallenges
  *    - acceptPersonalChallenge
+ *    - checkDeviceTrust
+ *    - releaseDeviceTrust
  * 3) Providing small helpers for current dayKey + current 4-hour interval
  *
  * Not responsible for:
@@ -132,6 +134,78 @@ object FirebaseServerApi {
         val result = Firebase.auth.createUserWithEmailAndPassword(email, password).await()
         val user = result.user ?: error("Register succeeded but FirebaseUser is null.")
         AuthInfo(uid = user.uid, email = user.email)
+    }
+
+    // -------------------------------------------------------------------------
+    // DEVICE TRUST (multi-device concurrent login detection / blocking)
+    // -------------------------------------------------------------------------
+    //
+    // One trusted device per account at a time. The first login ever, or a
+    // repeat login from the same device, is allowed and (re-)claims the
+    // trust record — this never changes behavior for today's single-device
+    // flow. A login from a second device while the account is already active
+    // on a different device is refused. The slot frees up again once the
+    // trusted device signs out (releaseDeviceTrustResult()).
+
+    /**
+     * Result of checking whether this device may log in for the signed-in account.
+     */
+    data class DeviceTrustCheck(
+        val allowed: Boolean,
+    )
+
+    /**
+     * Checks whether [deviceId] is allowed to be the account's active device.
+     * If allowed, this call also claims/refreshes the trust record for it.
+     *
+     * Expected callable: checkDeviceTrust
+     */
+    suspend fun checkDeviceTrustResult(
+        deviceId: String,
+        deviceName: String,
+    ): Result<DeviceTrustCheck> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            require(deviceId.isNotBlank()) { "deviceId is required." }
+
+            val payload = mapOf(
+                "deviceId" to deviceId,
+                "deviceName" to deviceName,
+            )
+
+            val res = functions.getHttpsCallable("checkDeviceTrust").call(payload).await()
+            val map = res.data as? Map<*, *> ?: error("checkDeviceTrust returned invalid payload.")
+
+            val ok = map["ok"] as? Boolean ?: false
+            if (!ok) error("checkDeviceTrust returned ok=false.")
+
+            DeviceTrustCheck(
+                allowed = map["allowed"] as? Boolean ?: error("checkDeviceTrust response missing allowed."),
+            )
+        }
+    }
+
+    /**
+     * Frees up this account's device slot so a future login from any device
+     * is allowed. Call on sign-out. Only has an effect if [deviceId] is the
+     * device that currently holds the slot.
+     *
+     * Expected callable: releaseDeviceTrust
+     */
+    suspend fun releaseDeviceTrustResult(deviceId: String): Result<Boolean> {
+        val uidCheck = requireUid()
+        if (uidCheck.isFailure) {
+            return Result.failure(uidCheck.exceptionOrNull()!!)
+        }
+
+        return runCatching {
+            require(deviceId.isNotBlank()) { "deviceId is required." }
+            callOkResult("releaseDeviceTrust", mapOf("deviceId" to deviceId)).getOrThrow()
+        }
     }
 
     // -------------------------------------------------------------------------

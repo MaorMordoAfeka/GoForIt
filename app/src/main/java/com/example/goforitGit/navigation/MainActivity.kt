@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,8 +23,10 @@ import androidx.navigation.ui.navigateUp
 import androidx.navigation.ui.setupActionBarWithNavController
 import androidx.navigation.ui.setupWithNavController
 import com.example.goforitGit.R
+import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.core.service.BleAdvertScanService
 import com.example.goforitGit.core.service.StepService
+import com.example.goforitGit.core.util.DeviceSecurity.DeviceIdentity
 import com.example.goforitGit.core.util.FourHourBuckets.FourHourUploadScheduler
 import com.example.goforitGit.core.util.TrackingLifecycle.OnboardingPrefs
 import com.example.goforitGit.core.util.TrackingLifecycle.TrackingPermissions
@@ -685,6 +688,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             runCatching { stopService(Intent(this@MainActivity, StepService::class.java)) }
             runCatching { BleAdvertScanService.stop(this@MainActivity) }
+            releaseDeviceTrustSafely()
             Firebase.auth.signOut()
             startActivity(
                 Intent(this@MainActivity, LoginActivity::class.java).apply {
@@ -693,6 +697,20 @@ class MainActivity : AppCompatActivity() {
             )
             finish()
         }
+    }
+
+    /**
+     * Frees up this account's device slot on sign-out, so a future login
+     * from any device (including this one) is allowed again. See
+     * FirebaseServerApi's DEVICE TRUST section for the full flow.
+     */
+    private suspend fun releaseDeviceTrustSafely() {
+        val deviceId = DeviceIdentity.getOrCreateDeviceId(this@MainActivity)
+        runCatching { FirebaseServerApi.releaseDeviceTrustResult(deviceId) }
+            .getOrNull()
+            ?.onFailure { e ->
+                Log.e("AUTH", "releaseDeviceTrust failed: ${e.message}", e)
+            }
     }
 
     // ---- Lifecycle ----
