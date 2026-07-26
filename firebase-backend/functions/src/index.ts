@@ -891,6 +891,102 @@ export const registerFcmToken = onCall({ region: FUNCTIONS_REGION }, async (requ
 });
 
 // -----------------------------------------------------------------------------
+// Multi-device concurrent login detection (login blocking)
+// -----------------------------------------------------------------------------
+//
+// One "trusted device" per user at a time, tracked in the server-only doc
+// users/{uid}/security/deviceTrust (see firestore.rules — clients cannot
+// write this directly, only through the callables below). A user's first
+// login ever, or a repeat login from the same device, is allowed and (re-)
+// claims the trust record. A login attempt from a second device while the
+// first is still trusted is refused. The slot frees up again when the
+// trusted device signs out (see releaseDeviceTrust).
+
+function requireDeviceId(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim().length < 8 || raw.trim().length > 128) {
+    throw new HttpsError("invalid-argument", "deviceId is required.");
+  }
+  return raw.trim();
+}
+
+function normalizeDeviceName(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim().length === 0) return "Unknown device";
+  return raw.trim().slice(0, 80);
+}
+
+type DeviceTrustData = {
+  trustedDeviceId: string | null;
+  trustedDeviceName: string | null;
+  trustedDeviceSince: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
+};
+
+// -----------------------------------------------------------------------------
+// Callable: checkDeviceTrust
+// -----------------------------------------------------------------------------
+
+export const checkDeviceTrust = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+  await ensureUserDoc(uid);
+
+  const deviceId = requireDeviceId(request.data?.deviceId);
+  const deviceName = normalizeDeviceName(request.data?.deviceName);
+
+  const trustRef = db.doc(`users/${uid}/security/deviceTrust`);
+  const trustSnap = await trustRef.get();
+  const trustData = (trustSnap.data() ?? {}) as Partial<DeviceTrustData>;
+  const trustedDeviceId =
+    typeof trustData.trustedDeviceId === "string" ? trustData.trustedDeviceId : null;
+
+  if (trustedDeviceId !== null && trustedDeviceId !== deviceId) {
+    return { ok: true, allowed: false };
+  }
+
+  await trustRef.set(
+    {
+      trustedDeviceId: deviceId,
+      trustedDeviceName: deviceName,
+      trustedDeviceSince: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return { ok: true, allowed: true };
+});
+
+// -----------------------------------------------------------------------------
+// Callable: releaseDeviceTrust
+// -----------------------------------------------------------------------------
+//
+// Called on sign-out so the account's device slot frees up for a future
+// login from any device. Only clears the record if [deviceId] is the device
+// that currently holds it, so a device that was refused by checkDeviceTrust
+// can't call this to kick out the account's real active device.
+
+export const releaseDeviceTrust = onCall({ region: FUNCTIONS_REGION }, async (request) => {
+  const uid = requireUid(request);
+  const deviceId = requireDeviceId(request.data?.deviceId);
+
+  const trustRef = db.doc(`users/${uid}/security/deviceTrust`);
+  const trustSnap = await trustRef.get();
+  const trustData = (trustSnap.data() ?? {}) as Partial<DeviceTrustData>;
+  const trustedDeviceId =
+    typeof trustData.trustedDeviceId === "string" ? trustData.trustedDeviceId : null;
+
+  if (trustedDeviceId === deviceId) {
+    await trustRef.set(
+      {
+        trustedDeviceId: null,
+        trustedDeviceName: null,
+        trustedDeviceSince: null,
+      },
+      { merge: true }
+    );
+  }
+
+  return { ok: true };
+});
+
+// -----------------------------------------------------------------------------
 // Callable: updateQuietHours
 // -----------------------------------------------------------------------------
 

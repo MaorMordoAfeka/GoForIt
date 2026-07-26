@@ -31,6 +31,16 @@ service cloud.firestore {
       match /fcm_tokens/{token} {
         allow read, write: if isOwner(uid);
       }
+
+      // Multi-device concurrent login detection. Server-only: the client
+      // never writes this directly, only through the checkDeviceTrust /
+      // releaseDeviceTrust callables. This is deliberate — if a client could
+      // write its own trustedDeviceId, it could let a second device in
+      // simply by overwriting the record.
+      match /security/{docId} {
+        allow read: if isOwner(uid);
+        allow write: if false; // server-only
+      }
     }
 
     match /bonus_stations/{stationId} {
