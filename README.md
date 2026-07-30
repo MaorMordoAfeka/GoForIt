@@ -40,7 +40,7 @@ Engineering final project by **Maor Mordo & Idan Meir**.
 | **Campus bonuses** | Steps inside the college polygon are worth 10 bonus points each. Physical BLE beacons (Raspberry Pi 5) award extra points when visited. |
 | **Personal challenges** | Server-generated goals (`raise_baseline`, `study_break_boost`, `campus_explorer`). The client only shows them and lets you accept. |
 | **Anti-cheat** | Detects clock manipulation and out-of-app edits to the saved step data, and gives each install its own device identity. |
-| **Offline maps** | MapLibre map, GraphHopper foot routing, and an H3-indexed POI database — all bundled in the APK. Only place-name autocomplete needs internet. |
+| **Offline maps** | MapLibre map, GraphHopper foot routing, and an H3-indexed POI database - all bundled in the APK. Only place-name autocomplete needs internet. |
 | **Notifications** | FCM reminders with per-user quiet hours, sent by a scheduled backend job. |
 | **QA console** | A hidden acceptance-test screen, locked to one dedicated tester account. |
 
@@ -79,7 +79,7 @@ Package root is `com.example.goforitGit`, organized by feature: `core.service`, 
 
 ## Step counting
 
-`StepCounterZC` (~1,160 lines) is the core of the app — a singleton `SensorEventListener` that detects steps from zero crossings in the vertical component of acceleration.
+`StepCounterZC` (~1,160 lines) is the core of the app - a singleton `SensorEventListener` that detects steps from zero crossings in the vertical component of acceleration.
 
 - A small state machine validates each candidate step by amplitude and period. Samples are kept in `recentStepsCsv` as `timeMs:periodS:vRatio:amp`.
 - Motion mode is one of `UNKNOWN`, `STATIONARY`, `STANDING_STILL`, `WALKING`, `RUNNING`, `CYCLING`, `DRIVING`. Steps only count in plausible modes, and mode changes use hysteresis so the label doesn't flicker.
@@ -92,8 +92,8 @@ Package root is `com.example.goforitGit`, organized by feature: `core.service`, 
 | Store | File | What it holds |
 |---|---|---|
 | `StepHistoryStore` | `stepzc_prefs` | The counter's source of truth: total steps, recent samples, last-save time, campus-bonus sync counters. |
-| `DailyStepsStore` | — | One highest-total-per-day value, used for "best day" and weekly stats. |
-| `FourHourBucketsSinceBoot` | — | Splits the since-boot sensor count into six 4-hour buckets, handling reboots and day rollover (keeps today and yesterday). |
+| `DailyStepsStore` | - | One highest-total-per-day value, used for "best day" and weekly stats. |
+| `FourHourBucketsSinceBoot` | - | Splits the since-boot sensor count into six 4-hour buckets, handling reboots and day rollover (keeps today and yesterday). |
 
 `StepBus` is a tiny global object of `MutableStateFlow`s that keeps the counter independent of the UI.
 
@@ -103,12 +103,12 @@ Package root is `com.example.goforitGit`, organized by feature: `core.service`, 
 
 Keeping a foreground service running on modern Android was the hardest part of the project, so the design tackles it head-on:
 
-- **`StepService`** — foreground service for step counting and fused location. On Android 14+ it downgrades its service *type* when started from the background without `ACCESS_BACKGROUND_LOCATION`, because `type=LOCATION` is rejected there. Writes a heartbeat every ~30 s through `TrackingHeartbeat`.
-- **`TrackingHealthWorker`** — runs every 15 minutes. If the heartbeat is stale, it enqueues the restart worker.
-- **`TrackingRestartWorker`** — a one-shot expedited worker that calls `setForeground(...)`. Because it is itself briefly a foreground service, it is allowed to start other foreground services on Android 12+ — the only reliable background restart path. It calls `TrackingServiceManager.ensureTrackingRunning(...)`.
-- **`TrackingServiceManager`** — the single place that starts/stops tracking (`StepService` + `BleAdvertScanService`) and schedules the health worker. State lives in `TrackingPrefs`.
-- **`BootReceiver`** — on boot or app update, just hands off to `TrackingRestartWorker`. (Direct-boot support was removed on purpose: counting needs an unlocked user anyway.)
-- **`Trackingpermissions` / `Onboardingprefs`** — the runtime-permission chain and first-run state used by `MainActivity`.
+- **`StepService`** - foreground service for step counting and fused location. On Android 14+ it downgrades its service *type* when started from the background without `ACCESS_BACKGROUND_LOCATION`, because `type=LOCATION` is rejected there. Writes a heartbeat every ~30 s through `TrackingHeartbeat`.
+- **`TrackingHealthWorker`** - runs every 15 minutes. If the heartbeat is stale, it enqueues the restart worker.
+- **`TrackingRestartWorker`** - a one-shot expedited worker that calls `setForeground(...)`. Because it is itself briefly a foreground service, it is allowed to start other foreground services on Android 12+ - the only reliable background restart path. It calls `TrackingServiceManager.ensureTrackingRunning(...)`.
+- **`TrackingServiceManager`** - the single place that starts/stops tracking (`StepService` + `BleAdvertScanService`) and schedules the health worker. State lives in `TrackingPrefs`.
+- **`BootReceiver`** - on boot or app update, just hands off to `TrackingRestartWorker`. (Direct-boot support was removed on purpose: counting needs an unlocked user anyway.)
+- **`Trackingpermissions` / `Onboardingprefs`** - the runtime-permission chain and first-run state used by `MainActivity`.
 
 Worst-case recovery takes one health-worker cycle (~15 minutes). That's acceptable because the hardware counter and `FourHourBucketsSinceBoot` keep accumulating in the meantime.
 
@@ -140,7 +140,7 @@ On the client, `LeaderboardActivity` loads 20 entries at a time, can show any pa
 
 ## Campus and beacon bonuses
 
-**Campus steps — 10 bonus points each**
+**Campus steps - 10 bonus points each**
 
 `CollegeZoneChecker` loads `assets/college_polygon.json` (GeoJSON, `[lon, lat]` order) and answers point-in-polygon queries by ray casting, with a small boundary tolerance. While `StepService` gets location fixes inside the polygon, qualifying steps pile up in `StepHistoryStore`. The client periodically calls `syncCollegeAreaSteps`, and the server credits `Δsteps × 10` bonus points for that `dayKey`.
 
@@ -160,7 +160,7 @@ The screen is deliberately a thin view. Targets, baselines, progress, rewards, a
 
 Client entry points are `FirebaseServerApi.getMyPersonalChallenges()` and `acceptPersonalChallenge()`.
 
-> **Note:** the challenge callables are called by the client but aren't in the included `index.ts` snapshot — they live in a newer functions revision.
+> **Note:** the challenge callables are called by the client but aren't in the included `index.ts` snapshot - they live in a newer functions revision.
 
 ---
 
@@ -168,9 +168,9 @@ Client entry points are `FirebaseServerApi.getMyPersonalChallenges()` and `accep
 
 `AntiCheatManager` is a facade over two independent detectors. Both only *read* the counter's prefs; neither ever modifies `StepCounterZC`.
 
-**`TimeIntegrityMonitor`** — spots system-clock tampering by comparing the user-changeable wall clock (`System.currentTimeMillis`) against the monotonic `SystemClock.elapsedRealtime` within one boot session. Divergence beyond normal NTP drift means tampering. It also flags a saved `lastSaveMs` that sits in the future, which means the clock was rewound between sessions. States: `OK`, `FIRST_RUN`, `REBOOT`, and tamper states with counters.
+**`TimeIntegrityMonitor`** - spots system-clock tampering by comparing the user-changeable wall clock (`System.currentTimeMillis`) against the monotonic `SystemClock.elapsedRealtime` within one boot session. Divergence beyond normal NTP drift means tampering. It also flags a saved `lastSaveMs` that sits in the future, which means the clock was rewound between sessions. States: `OK`, `FIRST_RUN`, `REBOOT`, and tamper states with counters.
 
-**`DataIntegrityMonitor`** — spots edits to `stepzc_prefs` made outside the app (root tools, ADB restore, prefs editors) using an HMAC-SHA256 tag over the step values. The key lives in the Android Keystore (`goforit_stepdata_hmac_v1`, sign/verify only), so even root can't forge a tag. Legitimate in-app writes re-sign automatically via `startMonitoring()`. A missing tag file alongside existing data also counts as tampering.
+**`DataIntegrityMonitor`** - spots edits to `stepzc_prefs` made outside the app (root tools, ADB restore, prefs editors) using an HMAC-SHA256 tag over the step values. The key lives in the Android Keystore (`goforit_stepdata_hmac_v1`, sign/verify only), so even root can't forge a tag. Legitimate in-app writes re-sign automatically via `startMonitoring()`. A missing tag file alongside existing data also counts as tampering.
 
 `snapshot()` returns both reports, so upload paths can hold back totals they don't trust.
 
@@ -190,7 +190,7 @@ The `feature.map` package gives a complete offline walking-route experience for 
 | `OfflineRouter` | Loads the graph and computes offline foot routes. `RoutePrefs` carries the slider settings and extra-distance budget. |
 | `PoiDbInstaller` / `PoiRepository` | Install and query the SQLite POI database (H3-indexed, with a lat/lon fallback), bucketed by category. |
 | `H3OpeningScorer` | Scores possible detours using Uber H3 grid disks: finds POI-rich neighboring cells inside a bearing cone and distance budget, then inserts the best one into the route. |
-| `GeocoderApi` | The only online piece — Komoot Photon autocomplete, biased to Israel, Hebrew names where OSM has them. |
+| `GeocoderApi` | The only online piece - Komoot Photon autocomplete, biased to Israel, Hebrew names where OSM has them. |
 | `IsraelBounds` | Camera and bounds constraints. |
 | `RoutePlanner` | Empty placeholder, reserved for future orchestration. |
 
@@ -248,9 +248,9 @@ Layouts use a `feature_*` / `nav_*` naming convention. Two nav graphs (`mobile_n
 
 ## QA tools
 
-- **`QaAccess`** — a hard gate: the QA UI only appears and only opens when both the Firebase email (`goforit.qa@test.com`) and the UID match the dedicated tester account. Every QA screen re-checks, which blocks entry via an explicit Intent.
-- **`QaActivity`** — the in-app acceptance-test console (service state, stores, manual upload triggers, and so on).
-- **`grantQaTester.cjs` / `seedLeaderboardQa.cjs`** — Node scripts using Firebase Admin to grant the QA role and seed leaderboard test data.
+- **`QaAccess`** - a hard gate: the QA UI only appears and only opens when both the Firebase email (`goforit.qa@test.com`) and the UID match the dedicated tester account. Every QA screen re-checks, which blocks entry via an explicit Intent.
+- **`QaActivity`** - the in-app acceptance-test console (service state, stores, manual upload triggers, and so on).
+- **`grantQaTester.cjs` / `seedLeaderboardQa.cjs`** - Node scripts using Firebase Admin to grant the QA role and seed leaderboard test data.
 
 ---
 
