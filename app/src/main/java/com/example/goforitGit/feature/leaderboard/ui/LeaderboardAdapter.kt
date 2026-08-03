@@ -17,10 +17,18 @@ class LeaderboardAdapter(
 
     private val items = mutableListOf<LeaderboardEntry>()
 
+    /**
+     * True once the screen has finished looking up public profiles for the rows
+     * it is showing. Until then a blank username is genuinely still loading;
+     * afterwards a blank username means the player never set one.
+     */
+    private var profilesResolved: Boolean = false
+
     private val currentUid: String?
         get() = FirebaseAuth.getInstance().currentUser?.uid
 
-    fun replaceAll(newItems: List<LeaderboardEntry>) {
+    fun replaceAll(newItems: List<LeaderboardEntry>, profilesResolved: Boolean) {
+        this.profilesResolved = profilesResolved
         items.clear()
         items.addAll(newItems)
         notifyDataSetChanged()
@@ -43,6 +51,7 @@ class LeaderboardAdapter(
         holder.bind(
             item = items[position],
             currentUid = currentUid,
+            profilesResolved = profilesResolved,
             onItemClick = onItemClick
         )
     }
@@ -62,17 +71,18 @@ class LeaderboardAdapter(
         fun bind(
             item: LeaderboardEntry,
             currentUid: String?,
+            profilesResolved: Boolean,
             onItemClick: (LeaderboardEntry) -> Unit
         ) {
             val isCurrentUser = currentUid != null && currentUid == item.uid
 
             tvRank.text = "#${item.rank}"
-            tvUsername.text = displayUsername(item, isCurrentUser)
+            tvUsername.text = displayUsername(item, isCurrentUser, profilesResolved)
 
             tvPoints.text = item.totalPoints.toString()
             tvSteps.text = item.totalSteps.toString()
             tvBonus.text = item.bonusPoints.toString()
-            tvFaculty.text = item.faculty.ifBlank { "General" }
+            tvFaculty.text = displayFaculty(item, profilesResolved)
 
             val accentColor = when (item.rank) {
                 1 -> Color.parseColor("#F2B233")
@@ -102,13 +112,29 @@ class LeaderboardAdapter(
             }
         }
 
-        private fun displayUsername(item: LeaderboardEntry, isCurrentUser: Boolean): String {
-            val username = item.username.ifBlank { "Loading profile…" }
+        private fun displayUsername(
+            item: LeaderboardEntry,
+            isCurrentUser: Boolean,
+            profilesResolved: Boolean
+        ): String {
+            val fallback = when {
+                !profilesResolved -> "Loading profile…"
+                item.rank > 0 -> "Player #${item.rank}"
+                else -> "Unnamed player"
+            }
+
+            val username = item.username.ifBlank { fallback }
+
             return if (isCurrentUser) {
                 if (item.username.isBlank()) "You" else "You • $username"
             } else {
                 username
             }
+        }
+
+        private fun displayFaculty(item: LeaderboardEntry, profilesResolved: Boolean): String {
+            if (item.faculty.isNotBlank()) return item.faculty
+            return if (profilesResolved) "No faculty set" else "…"
         }
 
         private fun dp(view: View, value: Int): Int {

@@ -1104,8 +1104,45 @@ export const updateMyProfile = onCall({ region: FUNCTIONS_REGION }, async (reque
     current.quietHoursStartHour !== quietHoursStartHour ||
     current.quietHoursEndHour !== quietHoursEndHour;
 
-  if (email !== current.email) {
-    await admin.auth().updateUser(uid, { email });
+  // ---------------------------------------------------------------------------
+  // Email change
+  //
+  // The address lives in two places: Firebase Auth (used to sign in) and the
+  // users document (used by every read path). They must not drift apart, so the
+  // conflict is checked before anything is written, and the Auth change is
+  // rolled back if the Firestore transaction below rejects.
+  // ---------------------------------------------------------------------------
+  const emailChanged = email !== current.email;
+
+  if (emailChanged) {
+    const existing = await admin.auth().getUserByEmail(email).catch(() => null);
+    if (existing && existing.uid !== uid) {
+      throw new HttpsError(
+        "already-exists",
+        "That email is already in use by another account."
+      );
+    }
+
+    try {
+      await admin.auth().updateUser(uid, { email });
+    } catch (err) {
+      // Admin SDK errors are not HttpsError, so without this mapping the client
+      // only ever sees a generic INTERNAL and cannot explain the failure.
+      const code = (err as { code?: string }).code ?? "";
+
+      if (code === "auth/email-already-exists") {
+        throw new HttpsError(
+          "already-exists",
+          "That email is already in use by another account."
+        );
+      }
+      if (code === "auth/invalid-email") {
+        throw new HttpsError("invalid-argument", "That email address is not valid.");
+      }
+
+      logger.error(`updateMyProfile: auth email update failed for ${uid}`, err);
+      throw new HttpsError("internal", "Could not update the email address.");
+    }
   }
 
   const userRef = db.doc(`users/${uid}`);
@@ -1117,64 +1154,80 @@ export const updateMyProfile = onCall({ region: FUNCTIONS_REGION }, async (reque
       ? db.doc(`usernames/${oldUsernameNormalized}`)
       : null;
 
-  await db.runTransaction(async (tx) => {
-    // IMPORTANT:
-    // In Firestore transactions, all reads must happen before all writes.
+  try {
+    await db.runTransaction(async (tx) => {
+      // IMPORTANT:
+      // In Firestore transactions, all reads must happen before all writes.
 
-    const newUsernameSnap = await tx.get(newUsernameRef);
+      const newUsernameSnap = await tx.get(newUsernameRef);
 
-    const oldUsernameSnap =
-      oldUsernameRef && oldUsernameNormalized !== usernameNormalized
-        ? await tx.get(oldUsernameRef)
-        : null;
+      const oldUsernameSnap =
+        oldUsernameRef && oldUsernameNormalized !== usernameNormalized
+          ? await tx.get(oldUsernameRef)
+          : null;
 
-    if (newUsernameSnap.exists) {
-      const ownerUid = newUsernameSnap.get("uid");
+      if (newUsernameSnap.exists) {
+        const ownerUid = newUsernameSnap.get("uid");
 
-      if (ownerUid !== uid) {
-        throw new HttpsError("already-exists", "This username is already taken.");
+        if (ownerUid !== uid) {
+          throw new HttpsError("already-exists", "This username is already taken.");
+        }
       }
-    }
 
-    const patch: Record<string, unknown> = {
-      username,
-      usernameNormalized,
-      email,
-      profileImageUrl,
-      timezone,
-      faculty,
-      lowActivityNudgeEnabled: lowActivityNudgeEnabledRaw,
-      quietHoursStartHour,
-      quietHoursEndHour,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-
-    if (quietHoursChanged) {
-      patch.preferredActiveInterval = null;
-      patch.preferredInactiveInterval = null;
-    }
-
-    tx.set(userRef, patch, { merge: true });
-
-    tx.set(
-      newUsernameRef,
-      {
-        uid,
+      const patch: Record<string, unknown> = {
         username,
+        usernameNormalized,
+        email,
+        profileImageUrl,
+        timezone,
+        faculty,
+        lowActivityNudgeEnabled: lowActivityNudgeEnabledRaw,
+        quietHoursStartHour,
+        quietHoursEndHour,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+      };
 
-    if (
-      oldUsernameRef &&
-      oldUsernameSnap?.exists &&
-      oldUsernameSnap.get("uid") === uid &&
-      oldUsernameNormalized !== usernameNormalized
-    ) {
-      tx.delete(oldUsernameRef);
+      if (quietHoursChanged) {
+        patch.preferredActiveInterval = null;
+        patch.preferredInactiveInterval = null;
+      }
+
+      tx.set(userRef, patch, { merge: true });
+
+      tx.set(
+        newUsernameRef,
+        {
+          uid,
+          username,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      if (
+        oldUsernameRef &&
+        oldUsernameSnap?.exists &&
+        oldUsernameSnap.get("uid") === uid &&
+        oldUsernameNormalized !== usernameNormalized
+      ) {
+        tx.delete(oldUsernameRef);
+      }
+    });
+  } catch (err) {
+    // A rejected username must not leave Auth on the new address while the
+    // users document keeps the old one. Restoring the previous email is skipped
+    // when there was no usable previous value, since updateUser({ email: "" })
+    // would throw and mask the real error.
+    if (emailChanged && current.email.length > 0) {
+      await admin
+        .auth()
+        .updateUser(uid, { email: current.email })
+        .catch((rollbackErr) => {
+          logger.error(`updateMyProfile: could not roll back email for ${uid}`, rollbackErr);
+        });
     }
-  });
+    throw err;
+  }
 
   const updated = await getUserProfile(uid);
 

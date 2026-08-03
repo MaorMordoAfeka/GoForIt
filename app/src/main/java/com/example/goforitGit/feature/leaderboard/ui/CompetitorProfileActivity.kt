@@ -34,6 +34,16 @@ class CompetitorProfileActivity : AppCompatActivity() {
     private var entry: LeaderboardEntry = LeaderboardEntry()
     private var dayKey: String = ""
 
+    /**
+     * True once the public-profile lookup has completed, successfully or not.
+     *
+     * Placeholders depend on this. A blank username while the request is in
+     * flight really is "loading"; a blank username afterwards means the player
+     * never saved a profile, and the UI must say so instead of showing a
+     * spinner-style message forever.
+     */
+    private var profileLoadFinished = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -70,31 +80,49 @@ class CompetitorProfileActivity : AppCompatActivity() {
         val isYou = isCurrentUser(item.uid)
         val fmt = NumberFormat.getInstance(Locale.getDefault())
 
-        val username = item.username.ifBlank {
-            if (isYou) "You" else "Loading profile…"
-        }
+        val username = item.username.ifBlank { fallbackUsername(item, isYou) }
+        val facultyLabel = facultyLabel(item.faculty)
 
         binding.tvYouChip.isVisible = isYou
         binding.tvHeaderName.text = username
 
-        binding.tvDepartment.text = item.faculty.ifBlank { "General" }
+        binding.tvDepartment.text = facultyLabel
 
         binding.tvRankValue.text = if (item.rank > 0) "#${item.rank}" else "—"
         binding.tvPointsValue.text = fmt.format(item.totalPoints)
         binding.tvStepsValue.text = fmt.format(item.totalSteps)
         binding.tvBonusValue.text = fmt.format(item.bonusPoints)
 
-        binding.tvFacultyValue.text = item.faculty.ifBlank { "General" }
+        binding.tvFacultyValue.text = facultyLabel
         binding.tvDayValue.text = dayKey.ifBlank { "Current leaderboard" }
 
-        binding.tvProfileSource.text = if (item.username.isNotBlank() || item.profileImageUrl.isNotBlank()) {
-            "Public profile loaded."
-        } else {
-            "Loading public profile."
+        binding.tvProfileSource.text = when {
+            !profileLoadFinished -> "Loading public profile."
+            item.username.isNotBlank() || item.profileImageUrl.isNotBlank() -> "Public profile loaded."
+            else -> "This player has not set up a public profile yet."
         }
 
         renderProfileImage(item.profileImageUrl)
         applyRankAccent(item.rank)
+    }
+
+    /**
+     * Label used when the leaderboard row and the public profile both carry an
+     * empty username, which happens for accounts that registered but never
+     * saved a profile (registration only collects email and password).
+     */
+    private fun fallbackUsername(item: LeaderboardEntry, isYou: Boolean): String {
+        return when {
+            isYou -> "You"
+            !profileLoadFinished -> "Loading profile…"
+            item.rank > 0 -> "Player #${item.rank}"
+            else -> "Unnamed player"
+        }
+    }
+
+    private fun facultyLabel(faculty: String): String {
+        if (faculty.isNotBlank()) return faculty
+        return if (profileLoadFinished) "No faculty set" else "…"
     }
 
     private fun loadPublicProfileIfAvailable(uid: String) {
@@ -103,23 +131,30 @@ class CompetitorProfileActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val result = FirebaseServerApi.getPublicUserProfileResult(uid)
 
+            // From here on, a blank username is a real answer, not a pending one.
+            profileLoadFinished = true
+
             result
                 .onSuccess { profile ->
-                    val merged = entry.copy(
+                    entry = entry.copy(
                         username = profile.username.ifBlank { entry.username },
                         profileImageUrl = profile.profileImageUrl.ifBlank { entry.profileImageUrl },
                         faculty = profile.faculty.ifBlank { entry.faculty }
                     )
-                    entry = merged
-                    renderSnapshot(merged)
+                    renderSnapshot(entry)
+
+                    // renderSnapshot writes tvProfileSource, so refine it afterwards.
+                    binding.tvProfileSource.text = if (entry.username.isBlank()) {
+                        "This player has not set up a public profile yet."
+                    } else {
+                        "Public profile loaded."
+                    }
                 }
                 .onFailure { e ->
                     Log.w(TAG, "Failed to load public profile for uid=$uid", e)
-                    if (entry.username.isBlank()) {
-                        entry = entry.copy(username = if (isCurrentUser(uid)) "You" else "Unknown user")
-                        renderSnapshot(entry)
-                    }
-                    binding.tvProfileSource.text = "Public profile is unavailable."
+                    renderSnapshot(entry)
+                    binding.tvProfileSource.text =
+                        "Public profile is unavailable: ${e.message ?: "unknown error"}"
                 }
 
             setLoading(false)

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.os.SystemClock
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.ProgressBar
@@ -13,6 +14,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.NestedScrollView
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -25,7 +27,6 @@ import com.example.goforitGit.navigation.DrawerNavigator
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.datepicker.CalendarConstraints
-import com.google.android.material.datepicker.DateValidatorPointBackward
 import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
@@ -34,6 +35,7 @@ import com.google.firebase.firestore.Query
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -43,6 +45,8 @@ import java.time.format.DateTimeFormatter
 class LeaderboardActivity : AppCompatActivity() {
 
     companion object {
+        private const val TAG = "LeaderboardActivity"
+
         private const val EXTRA_DAY_KEY = "extra_day_key"
         private const val EXTRA_QA_MODE = "extra_qa_mode"
         private const val EXTRA_QA_EXPECT_EMPTY = "extra_qa_expect_empty"
@@ -105,6 +109,7 @@ class LeaderboardActivity : AppCompatActivity() {
         }
     }
 
+    private lateinit var scrollContainer: NestedScrollView
     private lateinit var cardList: View
     private lateinit var layoutPageButtons: View
 
@@ -144,6 +149,12 @@ class LeaderboardActivity : AppCompatActivity() {
 
     /** Loading belongs to the current Activity instance and is reset after rotation. */
     private var isLoading = false
+
+    /**
+     * Set when the user taps Refresh, so the next successful load can confirm
+     * what actually happened instead of finishing silently.
+     */
+    private var pendingRefreshFeedback = false
 
     private var dayKey: String
         get() = screenState.dayKey
@@ -271,6 +282,8 @@ class LeaderboardActivity : AppCompatActivity() {
 
     private fun bindViews() {
 
+        scrollContainer = findViewById(R.id.scrollContainer)
+
         tvDayKey = findViewById(R.id.tvDayKey)
         tvEmpty = findViewById(R.id.tvEmpty)
         tvPageInfo = findViewById(R.id.tvPageInfo)
@@ -327,11 +340,7 @@ class LeaderboardActivity : AppCompatActivity() {
 
         btnMyRank.setOnClickListener { showMyRank() }
 
-        btnFirstPage.setOnClickListener {
-            if (currentPageIndex > 0) {
-                loadPageByIndex(0, showTopLoader = true)
-            }
-        }
+        btnFirstPage.setOnClickListener { goToFirstPage() }
 
         btnSort.setOnClickListener {
             sortDescending = !sortDescending
@@ -363,7 +372,10 @@ class LeaderboardActivity : AppCompatActivity() {
     }
 
     private fun showDateSelector() {
-        if (isLoading) return
+        if (isLoading) {
+            toast("Still loading, please wait…")
+            return
+        }
 
         val selectedDay = LocalDate.parse(dayKey)
         val selectedDayUtcMillis = selectedDay
@@ -396,7 +408,7 @@ class LeaderboardActivity : AppCompatActivity() {
 
     private fun selectDay(selectedDate: LocalDate) {
         // val today = LocalDate.parse(todayKey()) // commented to allow future dates
-        // fif (selectedDate.isAfter(today)) return // commented to allow future dates
+        // if (selectedDate.isAfter(today)) return // commented to allow future dates
         if (selectedDate.toString() == dayKey) return
 
         dayKey = selectedDate.toString()
@@ -404,6 +416,7 @@ class LeaderboardActivity : AppCompatActivity() {
         hasNextPage = false
         currentPageEntriesAsc = emptyList()
         screenState.hasLoadedData = false
+        screenState.profilesResolved = false
         pendingScrollUid = null
         pendingScrollRank = null
         profileLoadGeneration++
@@ -420,7 +433,43 @@ class LeaderboardActivity : AppCompatActivity() {
         selectDay(LocalDate.parse(todayKey()))
     }
 
+    /**
+     * Jumps back to the first page.
+     *
+     * The button stays enabled on page 0 on purpose: a disabled button cannot
+     * explain itself, and silently ignoring the tap looks like a broken screen.
+     */
+    private fun goToFirstPage() {
+        if (isLoading) {
+            toast("Still loading, please wait…")
+            return
+        }
+
+        if (selectedFaculty != null) {
+            toast("Paging is disabled while the ${selectedFaculty} filter is active")
+            return
+        }
+
+        if (currentPageIndex == 0) {
+            scrollContainer.smoothScrollTo(0, 0)
+            toast("You are already on the first page")
+            return
+        }
+
+        toast("Loading the first page…")
+        scrollContainer.smoothScrollTo(0, 0)
+        loadPageByIndex(0, showTopLoader = true)
+    }
+
     private fun refreshCurrentPage() {
+        if (isLoading) {
+            toast("A refresh is already running…")
+            return
+        }
+
+        pendingRefreshFeedback = true
+        toast("Refreshing $dayKey…")
+
         profileLoadGeneration++
         val faculty = selectedFaculty
         if (faculty != null) {
@@ -428,6 +477,20 @@ class LeaderboardActivity : AppCompatActivity() {
         } else {
             loadPageByIndex(currentPageIndex, showTopLoader = true)
         }
+    }
+
+    /** Confirms the outcome of a user-triggered refresh, which is otherwise invisible. */
+    private fun announceRefreshIfPending(count: Int) {
+        if (!pendingRefreshFeedback) return
+        pendingRefreshFeedback = false
+
+        toast(
+            if (count == 0) {
+                "Refreshed — no entries found for $dayKey"
+            } else {
+                "Refreshed — $count " + if (count == 1) "entry" else "entries"
+            }
+        )
     }
 
     /** Reloads the current day's data, honoring any active faculty filter. */
@@ -454,7 +517,10 @@ class LeaderboardActivity : AppCompatActivity() {
     }
 
     private fun showFacultyChooser() {
-        if (isLoading) return
+        if (isLoading) {
+            toast("Still loading, please wait…")
+            return
+        }
 
         val options = mutableListOf("All faculties")
         options.addAll(FACULTY_OPTIONS)
@@ -484,6 +550,7 @@ class LeaderboardActivity : AppCompatActivity() {
         hasNextPage = false
         currentPageEntriesAsc = emptyList()
         screenState.hasLoadedData = false
+        screenState.profilesResolved = false
         profileLoadGeneration++
         pendingScrollUid = null
         pendingScrollRank = null
@@ -494,56 +561,91 @@ class LeaderboardActivity : AppCompatActivity() {
         updateControls()
     }
 
+    /**
+     * Loads every ranked player of one faculty for the selected day.
+     *
+     * The day is scanned in PAGE_SIZE chunks with a rank cursor rather than in a
+     * single large read. One big request is rejected by the Firestore list rule,
+     * which caps request.query.limit, so a 2000-row query fails with
+     * PERMISSION_DENIED while the ordinary paged query succeeds. Each chunk here
+     * has exactly the same shape as the paged query, so it passes the same rule.
+     *
+     * Faculty names are grouped client-side because a server-side equality filter
+     * would miss values stored with surrounding whitespace.
+     */
     private fun loadFilteredPlayers(faculty: String, showTopLoader: Boolean) {
         if (isLoading) return
 
         isLoading = true
+        screenState.profilesResolved = false
         progressTop.visibility = if (showTopLoader) View.VISIBLE else View.GONE
-        progressBottom.visibility = View.GONE
+        progressBottom.visibility = if (showTopLoader) View.GONE else View.VISIBLE
         updateControls()
 
         val requestedDayKey = dayKey
         val requestedFaculty = faculty
 
-        // A single equality filter would miss faculties stored with surrounding
-        // whitespace, so we read the day's ranked entries and group client-side by
-        // normalized faculty name.
-        leaderboardQuery()
-            .limit(MAX_FILTER_SCAN.toLong())
-            .get()
-            .addOnSuccessListener { snapshot ->
-                if (dayKey != requestedDayKey ||
-                    selectedFaculty != requestedFaculty
-                ) return@addOnSuccessListener
+        lifecycleScope.launch {
+            val matches = mutableListOf<LeaderboardEntry>()
+            var scanned = 0
+            var cursorRank: Int? = null
+            var failure: Exception? = null
 
-                val all = snapshot.documents.mapNotNull { it.toLeaderboardEntryOrNull() }
+            try {
+                while (scanned < MAX_FILTER_SCAN) {
+                    var query = firestore.collection("leaderboards_daily")
+                        .document(requestedDayKey)
+                        .collection("entries")
+                        .orderBy("rank", Query.Direction.ASCENDING)
 
-                currentPageEntriesAsc =
-                    all.filter { normalizeFaculty(it.faculty) == requestedFaculty }
-                currentPageIndex = 0
-                hasNextPage = false
-                screenState.hasLoadedData = true
+                    val startAfterRank = cursorRank
+                    if (startAfterRank != null) {
+                        query = query.startAfter(startAfterRank.toLong())
+                    }
 
-                renderFilteredPlayers(scrollToTop = true)
-                enrichCurrentPageWithPublicProfiles(
-                    entriesSnapshot = currentPageEntriesAsc,
-                    expectedDayKey = requestedDayKey,
-                    expectedPageIndex = 0
-                )
+                    val docs = query.limit(PAGE_SIZE.toLong()).get().await().documents
+                    if (docs.isEmpty()) break
+
+                    val page = docs.mapNotNull { it.toLeaderboardEntryOrNull() }
+                    matches += page.filter { normalizeFaculty(it.faculty) == requestedFaculty }
+
+                    scanned += docs.size
+                    cursorRank = page.lastOrNull()?.rank ?: break
+                    if (docs.size < PAGE_SIZE) break
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Faculty filter failed for $requestedFaculty on $requestedDayKey", e)
+                failure = e
             }
-            .addOnFailureListener { e ->
-                Toast.makeText(
-                    this,
-                    "Failed to filter players: ${e.message}",
-                    Toast.LENGTH_LONG
-                ).show()
+
+            // A newer day or a different filter selection owns the screen now.
+            if (dayKey == requestedDayKey && selectedFaculty == requestedFaculty) {
+                val error = failure
+                if (error != null) {
+                    pendingRefreshFeedback = false
+                    toast("Failed to filter players: ${error.message ?: "unknown error"}")
+                } else {
+                    currentPageEntriesAsc = matches
+                    currentPageIndex = 0
+                    hasNextPage = false
+                    screenState.hasLoadedData = true
+
+                    renderFilteredPlayers(scrollToTop = true)
+                    announceRefreshIfPending(matches.size)
+
+                    enrichCurrentPageWithPublicProfiles(
+                        entriesSnapshot = currentPageEntriesAsc,
+                        expectedDayKey = requestedDayKey,
+                        expectedPageIndex = 0
+                    )
+                }
             }
-            .addOnCompleteListener {
-                isLoading = false
-                progressTop.visibility = View.GONE
-                progressBottom.visibility = View.GONE
-                updateControls()
-            }
+
+            isLoading = false
+            progressTop.visibility = View.GONE
+            progressBottom.visibility = View.GONE
+            updateControls()
+        }
     }
 
     private fun renderFilteredPlayers(scrollToTop: Boolean) {
@@ -556,20 +658,23 @@ class LeaderboardActivity : AppCompatActivity() {
             currentPageEntriesAsc.sortedBy { it.rank }
         }
 
-        adapter.replaceAll(items)
+        adapter.replaceAll(items, screenState.profilesResolved)
 
         val hasItems = items.isNotEmpty()
         if (hasItems) {
-            cardList.visibility = View.VISIBLE
+            recyclerView.visibility = View.VISIBLE
             if (scrollToTop) recyclerView.scrollToPosition(0)
         } else {
-            cardList.visibility = View.GONE
+            recyclerView.visibility = View.GONE
         }
 
-        tvEmpty.visibility = if (hasItems) View.GONE else View.VISIBLE
-        if (!hasItems) {
+        val showEmpty = !hasItems && screenState.hasLoadedData
+        tvEmpty.visibility = if (showEmpty) View.VISIBLE else View.GONE
+        if (showEmpty) {
             tvEmpty.text = "No ranked players in ${selectedFaculty ?: "this faculty"} for $dayKey."
         }
+
+        updateListCardVisibility()
 
         tvDayKey.text = "Day: $dayKey"
         val count = items.size
@@ -601,6 +706,7 @@ class LeaderboardActivity : AppCompatActivity() {
         if (isLoading || pageIndex < 0) return
 
         isLoading = true
+        screenState.profilesResolved = false
         progressTop.visibility = if (showTopLoader) View.VISIBLE else View.GONE
         progressBottom.visibility = if (showTopLoader) View.GONE else View.VISIBLE
         updateControls()
@@ -629,6 +735,7 @@ class LeaderboardActivity : AppCompatActivity() {
                 screenState.hasLoadedData = true
 
                 renderCurrentPage(scrollToTop = true)
+                announceRefreshIfPending(currentPageEntriesAsc.size)
                 handlePendingScrollIfNeeded()
 
                 qaInitialLoadSucceeded = qaMode && pageIndex == 0
@@ -639,6 +746,9 @@ class LeaderboardActivity : AppCompatActivity() {
                 )
             }
             .addOnFailureListener { e ->
+                Log.w(TAG, "Leaderboard page $pageIndex failed for $requestedDayKey", e)
+                pendingRefreshFeedback = false
+
                 Toast.makeText(
                     this,
                     "Failed to load leaderboard: ${e.message}",
@@ -651,6 +761,7 @@ class LeaderboardActivity : AppCompatActivity() {
             }
             .addOnCompleteListener {
                 isLoading = false
+                pendingRefreshFeedback = false
                 progressTop.visibility = View.GONE
                 progressBottom.visibility = View.GONE
                 updateControls()
@@ -662,6 +773,14 @@ class LeaderboardActivity : AppCompatActivity() {
             }
     }
 
+    /**
+     * Fills in usernames, photos and faculties that are missing from the
+     * leaderboard snapshot.
+     *
+     * Failures are counted rather than silently dropped: a row that stays blank
+     * because the lookup failed and a row that stays blank because the player
+     * never saved a profile look identical otherwise.
+     */
     private fun enrichCurrentPageWithPublicProfiles(
         entriesSnapshot: List<LeaderboardEntry>,
         expectedDayKey: String,
@@ -672,41 +791,54 @@ class LeaderboardActivity : AppCompatActivity() {
             .filter { it.username.isBlank() || it.profileImageUrl.isBlank() || it.faculty.isBlank() }
             .distinctBy { it.uid }
 
-        if (targets.isEmpty()) return false
+        if (targets.isEmpty()) {
+            screenState.profilesResolved = true
+            return false
+        }
 
+        screenState.profilesResolved = false
         val generation = ++profileLoadGeneration
 
         lifecycleScope.launch {
             try {
-                val profilesByUid = targets
+                val results = targets
                     .map { entry ->
                         async {
-                            FirebaseServerApi.getPublicUserProfileResult(entry.uid).getOrNull()
+                            entry.uid to FirebaseServerApi.getPublicUserProfileResult(entry.uid)
                         }
                     }
                     .awaitAll()
-                    .filterNotNull()
+
+                var failures = 0
+                results.forEach { (uid, result) ->
+                    result.onFailure { e ->
+                        failures++
+                        Log.w(TAG, "Public profile lookup failed for uid=$uid", e)
+                    }
+                }
+
+                val profilesByUid = results
+                    .mapNotNull { it.second.getOrNull() }
                     .associateBy { it.uid }
 
                 if (generation != profileLoadGeneration) return@launch
                 if (dayKey != expectedDayKey || currentPageIndex != expectedPageIndex) return@launch
 
-                if (profilesByUid.isNotEmpty()) {
-                    currentPageEntriesAsc = currentPageEntriesAsc.map { entry ->
-                        val profile = profilesByUid[entry.uid]
-                        if (profile == null) {
-                            entry
-                        } else {
-                            entry.copy(
-                                username = profile.username.ifBlank { entry.username },
-                                profileImageUrl = profile.profileImageUrl.ifBlank { entry.profileImageUrl },
-                                faculty = profile.faculty.ifBlank { entry.faculty }
-                            )
-                        }
-                    }
+                currentPageEntriesAsc = currentPageEntriesAsc.map { entry ->
+                    val profile = profilesByUid[entry.uid] ?: return@map entry
+                    entry.copy(
+                        username = profile.username.ifBlank { entry.username },
+                        profileImageUrl = profile.profileImageUrl.ifBlank { entry.profileImageUrl },
+                        faculty = profile.faculty.ifBlank { entry.faculty }
+                    )
+                }
 
-                    renderActivePlayers(scrollToTop = false)
-                    updateControls()
+                screenState.profilesResolved = true
+                renderActivePlayers(scrollToTop = false)
+                updateControls()
+
+                if (failures > 0 && failures == targets.size) {
+                    toast("Could not load player profiles ($failures lookups failed).")
                 }
             } finally {
                 if (qaMode && expectedPageIndex == 0) {
@@ -728,24 +860,47 @@ class LeaderboardActivity : AppCompatActivity() {
         val hasPodium = podiumEntries.isNotEmpty()
         val hasListItems = displayItems.isNotEmpty()
 
-        adapter.replaceAll(displayItems)
+        adapter.replaceAll(displayItems, screenState.profilesResolved)
 
         if (hasListItems) {
-            cardList.visibility = View.VISIBLE
+            recyclerView.visibility = View.VISIBLE
             if (scrollToTop) recyclerView.scrollToPosition(0)
         } else {
-            cardList.visibility = View.GONE
+            recyclerView.visibility = View.GONE
         }
 
         layoutPageButtons.visibility =
             if (hasListItems || currentPageIndex > 0 || hasNextPage) View.VISIBLE else View.GONE
 
-        tvEmpty.visibility =
-            if (!hasPodium && !hasListItems) View.VISIBLE else View.GONE
+        // Only after a load has actually completed is "empty" a real answer.
+        val isEmpty = !hasPodium && !hasListItems && screenState.hasLoadedData
+        tvEmpty.visibility = if (isEmpty) View.VISIBLE else View.GONE
+        if (isEmpty) {
+            tvEmpty.text = "No ranked players for $dayKey."
+        }
+
+        updateListCardVisibility()
 
         tvDayKey.text = "Day: $dayKey"
         tvPageInfo.text = buildPageInfo(currentPageEntriesAsc)
         btnSort.text = if (sortDescending) "Sort ↑" else "Sort ↓"
+    }
+
+    /**
+     * The list card only earns its space when it has something inside it.
+     *
+     * With three or fewer contestants the podium shows everyone and the
+     * RecyclerView is empty, so the card would otherwise render as a blank
+     * white block. It still has to appear while loading or when showing the
+     * empty message, because progressTop, progressBottom and tvEmpty are all
+     * children of this card.
+     */
+    private fun updateListCardVisibility() {
+        val hasRows = recyclerView.visibility == View.VISIBLE && adapter.itemCount > 0
+        val showsEmptyMessage = tvEmpty.visibility == View.VISIBLE
+
+        cardList.visibility =
+            if (hasRows || showsEmptyMessage || isLoading) View.VISIBLE else View.GONE
     }
 
     private fun podiumEntriesForCurrentPage(): List<LeaderboardEntry> {
@@ -851,18 +1006,34 @@ class LeaderboardActivity : AppCompatActivity() {
         }
         card.findViewById<TextView>(usernameId).text = podiumLabel(entry)
         card.findViewById<TextView>(pointsId).text = "${entry.totalPoints} pts"
-        card.findViewById<TextView>(facultyId).text = entry.faculty.ifBlank { "General" }
+        card.findViewById<TextView>(facultyId).text = facultyLabel(entry.faculty)
     }
 
     private fun podiumLabel(entry: LeaderboardEntry): String {
         val isYou = auth.currentUser?.uid == entry.uid
-        val username = entry.username.ifBlank { "Loading profile…" }
+
+        val fallback = when {
+            !screenState.profilesResolved -> "Loading profile…"
+            entry.rank > 0 -> "Player #${entry.rank}"
+            else -> "Unnamed player"
+        }
+
+        val username = entry.username.ifBlank { fallback }
 
         return if (isYou) {
             if (entry.username.isBlank()) "You" else "You \n $username"
         } else {
             username
         }
+    }
+
+    /**
+     * A blank faculty is not the "General" faculty, it is a player who never
+     * picked one, so it must not be labelled like a real department.
+     */
+    private fun facultyLabel(faculty: String): String {
+        if (faculty.isNotBlank()) return faculty
+        return if (screenState.profilesResolved) "No faculty set" else "…"
     }
 
     private fun buildPageInfo(itemsAsc: List<LeaderboardEntry>): String {
@@ -894,7 +1065,11 @@ class LeaderboardActivity : AppCompatActivity() {
 
         btnRefresh.isEnabled = !isLoading
         btnMyRank.isEnabled = !isLoading
-        btnFirstPage.isEnabled = !isLoading && currentPageIndex > 0
+
+        // Stays enabled on page 0 so the tap can be answered with a message
+        // instead of being swallowed.
+        btnFirstPage.isEnabled = !isLoading
+
         btnSort.isEnabled = !isLoading && currentPageEntriesAsc.isNotEmpty()
 
         btnPrevPage.isEnabled = !isLoading && currentPageIndex > 0
@@ -915,6 +1090,9 @@ class LeaderboardActivity : AppCompatActivity() {
             recyclerEntriesForCurrentPage().isNotEmpty()
         }
         btnSort.visibility = if (hasSortableItems) View.VISIBLE else View.GONE
+
+        // isLoading just changed, and the card hosts the progress spinners.
+        updateListCardVisibility()
     }
 
     private fun showMyRank() {
