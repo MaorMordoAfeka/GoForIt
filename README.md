@@ -1,16 +1,17 @@
 # GoForIt 🏃‍♂️
 
-A native Android app (Kotlin) that turns walking around a college campus into a game.  
-It counts your steps with a custom accelerometer algorithm, gives bonus points for walking on campus, ranks students and faculties on daily leaderboards,  
-hands out personal challenges, and includes a fully offline map and walking-route planner for Israel. All scoring happens on a Firebase backend, so the phone only measures and displays.
+A native Android app (Kotlin) that turns walking around a college campus into a game.
 
-Engineering final project by **Maor Mordo & Idan Meir**.  
+It counts your steps with a custom accelerometer algorithm, gives bonus points for walking on campus, ranks students and faculties on daily leaderboards, hands out personal challenges, and includes a fully offline map and walking-route planner for Israel. All scoring happens on a Firebase backend, so the phone only measures and displays.
+
+Engineering final project by **Maor Mordo & Idan Meir**.
 
 ---
 
 ## Contents
 
 - [What it does](#what-it-does)
+- [Screenshots](#screenshots)
 - [How it fits together](#how-it-fits-together)
 - [Step counting](#step-counting)
 - [Staying alive in the background](#staying-alive-in-the-background)
@@ -24,6 +25,7 @@ Engineering final project by **Maor Mordo & Idan Meir**.
 - [Screens](#screens)
 - [QA tools](#qa-tools)
 - [Permissions](#permissions)
+- [Code map](#code-map)
 - [Project structure](#project-structure)
 - [Building and running](#building-and-running)
 - [Design principles](#design-principles)
@@ -34,15 +36,47 @@ Engineering final project by **Maor Mordo & Idan Meir**.
 
 | Feature | Summary |
 |---|---|
-| **Step counting** | Custom zero-crossing algorithm over accelerometer data, with motion-mode detection (walking, running, cycling, driving, stationary), cadence estimation, and a hardware-sensor fallback for battery-saver mode. |
-| **Always-on tracking** | A foreground service plus a heartbeat, a watchdog, a restart worker, and a boot receiver, so tracking survives crashes, reboots, and Android 12–14 background restrictions. |
-| **Server-side scoring** | Steps upload in six 4-hour buckets per day. The server computes points (`steps / 100` plus bonuses), freezes daily leaderboards, and aggregates faculty standings. |
-| **Campus bonuses** | Steps inside the college polygon are worth 10 bonus points each. Physical BLE beacons (Raspberry Pi 5) award extra points when visited. |
-| **Personal challenges** | Server-generated goals (`raise_baseline`, `study_break_boost`, `campus_explorer`). The client only shows them and lets you accept. |
-| **Anti-cheat** | Detects clock manipulation and out-of-app edits to the saved step data, and gives each install its own device identity. |
-| **Offline maps** | MapLibre map, GraphHopper foot routing, and an H3-indexed POI database - all bundled in the APK. Only place-name autocomplete needs internet. |
-| **Notifications** | FCM reminders with per-user quiet hours, sent by a scheduled backend job. |
-| **QA console** | A hidden acceptance-test screen, locked to one dedicated tester account. |
+| **Step counting** | Custom zero-crossing algorithm over accelerometer data, with motion-mode detection (walking, running, cycling, driving, stationary), cadence estimation, and a hardware-sensor fallback for battery-saver mode. → [`StepCounterZC.kt`][stepcounter] |
+| **Always-on tracking** | A foreground service plus a heartbeat, a watchdog, a restart worker, and a boot receiver, so tracking survives crashes, reboots, and Android 12–14 background restrictions. → [`StepService.kt`][stepservice] |
+| **Server-side scoring** | Steps upload in six 4-hour buckets per day. The server computes points (`steps / 100` plus bonuses), freezes daily leaderboards, and aggregates faculty standings. → [`index.ts`][functions] |
+| **Campus bonuses** | Steps inside the college polygon earn extra points on top of their normal value. Physical BLE beacons (Raspberry Pi 5) award a station bonus once a day. → [`CollegeZoneChecker.kt`][collegezone], [`BleAdvertScanService.kt`][blescan] |
+| **Personal challenges** | Server-generated goals (`raise_baseline`, `study_break_boost`, `campus_explorer`) with easy/medium/hard tiers. The client only shows them and lets you accept. → [`PersonalChallengesActivity.kt`][challenges] |
+| **Anti-cheat** | Detects clock manipulation and out-of-app edits to the saved step data, and gives each install its own device identity. → [`AntiCheatManager.kt`][anticheat] |
+| **Offline maps** | MapLibre map, GraphHopper foot routing, and an H3-indexed POI database — all bundled in the APK. Only place-name autocomplete needs internet. → [`MapAndRoutesActivity.kt`][map] |
+| **Notifications** | FCM reminders with per-user quiet hours, sent by a scheduled backend job. → [`firebaseMessagingService.kt`][fcm] |
+| **QA console** | A hidden acceptance-test screen, locked to one dedicated tester account. → [`QaActivity.kt`][qaactivity] |
+
+---
+
+## Screenshots
+
+Images live in [`docs/screenshots/`](docs/screenshots). Drop your captures there using the file names below and they will show up here automatically.
+
+| Steps hub | Leaderboard | Faculty standings |
+|:--:|:--:|:--:|
+| <img src="docs/screenshots/steps.png" width="230" alt="Steps screen"> | <img src="docs/screenshots/leaderboard.png" width="230" alt="Daily leaderboard"> | <img src="docs/screenshots/faculties.png" width="230" alt="Faculty standings"> |
+| Live steps, cadence, speed, today's total, and the way into every other screen | Daily ranking with date picker, paging, and "my rank" | Per-faculty totals and averages, frozen nightly |
+
+| Personal challenges | Statistics | Map & routes |
+|:--:|:--:|:--:|
+| <img src="docs/screenshots/challenges.png" width="230" alt="Personal challenges"> | <img src="docs/screenshots/statistics.png" width="230" alt="Statistics"> | <img src="docs/screenshots/map.png" width="230" alt="Offline map and route planner"> |
+| Offers with difficulty tiers, countdowns, and progress | Hourly and daily step charts drawn from the local stores | Offline vector map, autocomplete, and a scenic-detour route |
+
+| Profile | Login | QA console |
+|:--:|:--:|:--:|
+| <img src="docs/screenshots/profile.png" width="230" alt="Profile"> | <img src="docs/screenshots/login.png" width="230" alt="Login"> | <img src="docs/screenshots/qa.png" width="230" alt="QA console"> |
+| Photo, faculty, quiet hours, timezone, lifetime stats | Email/password sign-in and registration | The three acceptance tests, tester account only |
+
+<details>
+<summary>How to capture new screenshots</summary>
+
+```bash
+adb exec-out screencap -p > docs/screenshots/steps.png
+```
+
+Or use **Android Studio → Running Devices → Screenshot**. Keep the same device and orientation for every shot so the images line up in the tables above.
+
+</details>
 
 ---
 
@@ -63,39 +97,42 @@ ANDROID APP (Kotlin)
                           │
                           ▼
 FIREBASE BACKEND (TypeScript)
-  Callables:  register, profile, quiet hours, upload, bonus, challenges
-  Scheduled:  finalizeDay (00:30), dispatchNotificationJobs (every 15 min), finalizeMonth
+  Callables:  register, profile, quiet hours, device trust,
+              upload, bonus, challenges
+  Scheduled:  finalizeDay (00:30), dispatchNotificationJobs (every 15 min),
+              finalizeMonth
   Firestore:  users/{uid}/daily/{dayKey}
+              users/{uid}/bonus_visits/{dayKey}
               leaderboards_daily/{dayKey}/entries
               leaderboards_daily/{dayKey}/faculties
               bonus_stations, notification_jobs
 ```
 
-**Step data path:** `StepService` runs `StepCounterZC`, which publishes to `StepBus` (state flows for steps, cadence, mode, speed, sensor stats). `StepRepository` exposes that as `LiveData`, and the ViewModels and fragments render it.
+**Step data path:** [`StepService`][stepservice] runs [`StepCounterZC`][stepcounter], which publishes to [`StepBus`][stepbus] (state flows for steps, cadence, mode, speed, sensor stats). [`StepRepository`][steprepo] exposes that as `LiveData`, and the ViewModels and fragments render it.
 
-Package root is `com.example.goforitGit`, organized by feature: `core.service`, `core.data`, `core.util`, `feature.map`, `feature.leaderboard`, `feature.challenges`, `feature.auth`, `feature.profile`, `feature.statistics`, `feature.qa`, `navigation`, `tracking_lifecycle`.
+Package root is `com.example.goforitGit`, organized by feature: `core.service`, `core.data`, `core.util`, `feature.map`, `feature.leaderboard`, `feature.challenges`, `feature.auth`, `feature.profile`, `feature.statistics`, `feature.steps`, `feature.qa`, `navigation`, `tracking_lifecycle`.
 
 ---
 
 ## Step counting
 
-`StepCounterZC` (~1,160 lines) is the core of the app - a singleton `SensorEventListener` that detects steps from zero crossings in the vertical component of acceleration.
+[`StepCounterZC`][stepcounter] (~1,160 lines) is the core of the app — a singleton `SensorEventListener` that detects steps from zero crossings in the vertical component of acceleration.
 
 - A small state machine validates each candidate step by amplitude and period. Samples are kept in `recentStepsCsv` as `timeMs:periodS:vRatio:amp`.
-- Motion mode is one of `UNKNOWN`, `STATIONARY`, `STANDING_STILL`, `WALKING`, `RUNNING`, `CYCLING`, `DRIVING`. Steps only count in plausible modes, and mode changes use hysteresis so the label doesn't flicker.
+- Motion mode is one of `UNKNOWN`, `STATIONARY`, `STANDING_STILL`, `WALKING`, `RUNNING`, `CYCLING`, `DRIVING`. Steps only count in plausible modes, and mode changes go through `applyModeWithHysteresis(...)` so the label doesn't flicker.
 - Cadence (steps per minute) and the actual sensor sampling rate are estimated continuously.
-- In battery-saver mode it falls back to the hardware `TYPE_STEP_COUNTER` sensor, with filters that reject suspicious bursts (for example, flipping the phone while standing still).
+- In battery-saver mode it falls back to the hardware `TYPE_STEP_COUNTER` sensor, with filters that drop suspicious bursts — for example tilting or spinning the phone while standing still.
 - The saved total is loaded on the first `getInstance()` call, even if `start()` is never called.
 
 **Where step data is saved** (all `SharedPreferences`, deliberately simple):
 
 | Store | File | What it holds |
 |---|---|---|
-| `StepHistoryStore` | `stepzc_prefs` | The counter's source of truth: total steps, recent samples, last-save time, campus-bonus sync counters. |
-| `DailyStepsStore` | - | One highest-total-per-day value, used for "best day" and weekly stats. |
-| `FourHourBucketsSinceBoot` | - | Splits the since-boot sensor count into six 4-hour buckets, handling reboots and day rollover (keeps today and yesterday). |
+| [`StepHistoryStore`][stephistory] | `stepzc_prefs` | The counter's source of truth: total steps, recent samples, last-save time, campus-bonus sync counters. |
+| [`DailyStepsStore`][dailysteps] | — | One highest-total-per-day value, used for "best day" and weekly stats. |
+| [`FourHourBucketsSinceBoot`][buckets] | — | Splits the since-boot sensor count into six 4-hour buckets, handling reboots and day rollover (keeps today and yesterday). |
 
-`StepBus` is a tiny global object of `MutableStateFlow`s that keeps the counter independent of the UI.
+[`StepBus`][stepbus] is a tiny global object of `MutableStateFlow`s that keeps the counter independent of the UI.
 
 ---
 
@@ -103,14 +140,14 @@ Package root is `com.example.goforitGit`, organized by feature: `core.service`, 
 
 Keeping a foreground service running on modern Android was the hardest part of the project, so the design tackles it head-on:
 
-- **`StepService`** - foreground service for step counting and fused location. On Android 14+ it downgrades its service *type* when started from the background without `ACCESS_BACKGROUND_LOCATION`, because `type=LOCATION` is rejected there. Writes a heartbeat every ~30 s through `TrackingHeartbeat`.
-- **`TrackingHealthWorker`** - runs every 15 minutes. If the heartbeat is stale, it enqueues the restart worker.
-- **`TrackingRestartWorker`** - a one-shot expedited worker that calls `setForeground(...)`. Because it is itself briefly a foreground service, it is allowed to start other foreground services on Android 12+ - the only reliable background restart path. It calls `TrackingServiceManager.ensureTrackingRunning(...)`.
-- **`TrackingServiceManager`** - the single place that starts/stops tracking (`StepService` + `BleAdvertScanService`) and schedules the health worker. State lives in `TrackingPrefs`.
-- **`BootReceiver`** - on boot or app update, just hands off to `TrackingRestartWorker`. (Direct-boot support was removed on purpose: counting needs an unlocked user anyway.)
-- **`Trackingpermissions` / `Onboardingprefs`** - the runtime-permission chain and first-run state used by `MainActivity`.
+- [**`StepService`**][stepservice] — foreground service for step counting and fused location. On Android 14+ it downgrades its service *type* when started from the background without `ACCESS_BACKGROUND_LOCATION`, because `type=LOCATION` is rejected there. Writes a heartbeat every ~30 s through [`TrackingHeartbeat`][heartbeat].
+- [**`TrackingHealthWorker`**][healthworker] — runs every 15 minutes. If the heartbeat is stale, it enqueues the restart worker.
+- [**`TrackingRestartWorker`**][restartworker] — a one-shot expedited worker that calls `setForeground(...)`. Because it is itself briefly a foreground service, it is allowed to start other foreground services on Android 12+ — the only reliable background restart path. It calls `TrackingServiceManager.ensureTrackingRunning(...)`.
+- [**`TrackingServiceManager`**][svcmanager] — the single place that starts and stops tracking ([`StepService`][stepservice] + [`BleAdvertScanService`][blescan]) and schedules the health worker. State lives in [`TrackingPrefs`][trackprefs].
+- [**`BootReceiver`**][bootreceiver] — on boot or app update, just hands off to the restart worker. (Direct-boot support was removed on purpose: counting needs an unlocked user anyway.)
+- [**`TrackingPermissions`**][perms] / [**`OnboardingPrefs`**][onboardprefs] — the runtime-permission chain and first-run state used by [`MainActivity`][mainactivity].
 
-Worst-case recovery takes one health-worker cycle (~15 minutes). That's acceptable because the hardware counter and `FourHourBucketsSinceBoot` keep accumulating in the meantime.
+Worst-case recovery takes one health-worker cycle (~15 minutes). That's acceptable because the hardware counter and [`FourHourBucketsSinceBoot`][buckets] keep accumulating in the meantime.
 
 ---
 
@@ -118,8 +155,8 @@ Worst-case recovery takes one health-worker cycle (~15 minutes). That's acceptab
 
 The day (`Asia/Jerusalem`) is split into six intervals: `0 = 00–04`, `1 = 04–08`, … `5 = 20–24`.
 
-1. `FourHourUploadScheduler` schedules `FourHourUploadWorker` shortly after each boundary.
-2. The worker reads the finished bucket, skips it if already sent (a "sent" prefs file), and calls the `uploadStepInterval` callable with `(dayKey, intervalIndex, stepsTotal, sessionId)`.
+1. [`FourHourUploadScheduler`][uploadsched] schedules [`FourHourUploadWorker`][uploadworker] shortly after each boundary.
+2. The worker reads the finished bucket, skips it if already sent (a "sent" prefs file), and calls the [`uploadStepInterval`][functions] callable with `(dayKey, intervalIndex, stepsTotal, sessionId)`.
 3. The `00:05` run also retries *yesterday's* bucket 5, which is missed if the phone was off overnight.
 4. The server saves buckets in `users/{uid}/daily/{dayKey}` (`stepsByInterval[6]`, `uploadedMask`, `totalSteps`), recomputes points, and updates cumulative totals and the live leaderboard.
 
@@ -129,52 +166,58 @@ A day is complete when `uploadedMask == 0b111111`.
 
 ## Points and leaderboards
 
-- **Base points:** `floor(totalSteps / 100)`
-- **Daily points:** base points + `bonusPoints` (campus and beacon bonuses)
-- **`finalizeDay`** runs at `00:30` daily. It walks all users, freezes yesterday's rankings into `leaderboards_daily/{dayKey}/entries`, builds per-faculty rows (`FacultyStanding`: rank, total points, total steps, bonus points, member count, average points), and schedules the next day's reminders.
-- **`finalizeMonth`** produces monthly aggregates.
+- **Base points:** `calcStepPoints(totalSteps) = floor(totalSteps / 100)` — one point per 100 steps.
+- **Daily points:** base points + `bonusPoints` (campus and beacon bonuses).
+- [**`finalizeDay`**][functions] runs at `00:30` daily. It walks all users, freezes yesterday's rankings into `leaderboards_daily/{dayKey}/entries`, builds per-faculty rows ([`FacultyStanding`][faculty]: rank, total points, total steps, bonus points, member count, average points), and schedules the next day's reminders.
+- [**`finalizeMonth`**][functions] produces monthly aggregates.
 
-On the client, `LeaderboardActivity` loads 20 entries at a time, can show any past `dayKey`, and has a faculty tab backed by `FacultyStandingAdapter`. Tapping a competitor opens `CompetitorProfileActivity`, which reads a sanitized profile via `getPublicUserProfile`.
+On the client, [`LeaderboardActivity`][leaderboard] loads one page of entries at a time, can show any past `dayKey`, and has a faculty view backed by [`FacultyStandingAdapter`][facultyadapter]. Screen state survives rotation through [`LeaderboardViewModel`][lbvm]. Tapping a competitor opens [`CompetitorProfileActivity`][competitor], which reads a sanitized profile via `getPublicUserProfile`.
 
 ---
 
 ## Campus and beacon bonuses
 
-**Campus steps - 10 bonus points each**
+**Campus steps**
 
-`CollegeZoneChecker` loads `assets/college_polygon.json` (GeoJSON, `[lon, lat]` order) and answers point-in-polygon queries by ray casting, with a small boundary tolerance. While `StepService` gets location fixes inside the polygon, qualifying steps pile up in `StepHistoryStore`. The client periodically calls `syncCollegeAreaSteps`, and the server credits `Δsteps × 10` bonus points for that `dayKey`.
+[`CollegeZoneChecker`][collegezone] loads `assets/college_polygon.json` (GeoJSON, `[lon, lat]` order) and answers point-in-polygon queries by ray casting, with a small boundary tolerance. While [`StepService`][stepservice] gets location fixes inside the polygon, qualifying steps pile up in [`StepHistoryStore`][stephistory]. The client periodically calls [`syncCollegeAreaSteps`][functions], and the server adds **1 bonus point per 100 qualified campus steps** (`COLLEGE_AREA_STEPS_PER_BONUS_POINT = 100`) on top of the steps' normal value — so a campus step is worth roughly twice a normal one.
+
+The bonus is computed from the *cumulative* qualified total rather than each delta, which keeps re-uploads idempotent and stops rounding from drifting across many small syncs.
+
+> An earlier version gave a flat 10 points per campus step, which made one campus step worth 1,000 ordinary ones and flattened the ranking. Lower the divisor to make campus time more rewarding, raise it to make it gentler.
 
 **BLE bonus stations**
 
-`BleAdvertScanService` is a foreground scanner looking for Raspberry Pi 5 beacons (manufacturer ID `0xFFFF`, device name `RPi5 Beacon`). It alternates between burst and balanced scan modes, restarts stale scans with a watchdog, and reacts to Bluetooth being turned on or off. On a match it calls `recordBonusVisit(stationId)`; the server checks the station against `bonus_stations/{stationId}` and awards the bonus once per day.
+[`BleAdvertScanService`][blescan] is a foreground scanner looking for Raspberry Pi 5 beacons (manufacturer ID `0xFFFF`, device name `RPi5 Beacon`). It alternates between burst and balanced scan modes, restarts stale scans with a watchdog, and reacts to Bluetooth being turned on or off. On a match it calls [`recordBonusVisit(stationId)`][functions]; the server looks the station up in `bonus_stations/{stationId}`, awards its configured `pointsValue`, and writes the visit to `users/{uid}/bonus_visits/{dayKey}` so it can only happen once a day.
 
 ---
 
 ## Personal challenges
 
-Defined in `Personalchallengemodels.kt` and shown by `PersonalChallengesActivity`.
+Defined in [`Personalchallengemodels.kt`][challengemodels] and shown by [`PersonalChallengesActivity`][challenges].
 
-Three types: `raise_baseline`, `study_break_boost`, `campus_explorer`.
+| Type | Goal | Reward |
+|---|---|---|
+| `raise_baseline` | Beat your 7-day campus baseline by 10% / 20% / 30% (easy / medium / hard) | 200 / 225 / 250 |
+| `study_break_boost` | 800 steps during a study break | 200 |
+| `campus_explorer` | 1,200 campus steps plus one bonus-station visit | 200 |
 
-The screen is deliberately a thin view. Targets, baselines, progress, rewards, and completion are never recalculated on the phone. The only action that changes anything is accepting a challenge (`acceptPersonalChallenge`), which the server validates and freezes. Parsing is defensive: a malformed payload falls back to safe defaults instead of crashing.
+Every one of those numbers lives in [`index.ts`][functions] only. Targets, baselines, progress, rewards, and completion are never recalculated on the phone, and progress comes from data the server already trusts (`collegeAreaQualifiedSteps` and verified bonus visits). The only action that changes anything is accepting a challenge (`acceptPersonalChallenge`), which the server validates and freezes. Parsing is defensive: a malformed payload falls back to safe defaults instead of crashing.
 
-Client entry points are `FirebaseServerApi.getMyPersonalChallenges()` and `acceptPersonalChallenge()`.
-
-> **Note:** the challenge callables are called by the client but aren't in the included `index.ts` snapshot - they live in a newer functions revision.
+Client entry points are [`FirebaseServerApi.getMyPersonalChallengesResult()`][api] and `acceptPersonalChallengeResult()`.
 
 ---
 
 ## Anti-cheat
 
-`AntiCheatManager` is a facade over two independent detectors. Both only *read* the counter's prefs; neither ever modifies `StepCounterZC`.
+[`AntiCheatManager`][anticheat] is a facade over two independent detectors. Both only *read* the counter's prefs; neither ever modifies [`StepCounterZC`][stepcounter].
 
-**`TimeIntegrityMonitor`** - spots system-clock tampering by comparing the user-changeable wall clock (`System.currentTimeMillis`) against the monotonic `SystemClock.elapsedRealtime` within one boot session. Divergence beyond normal NTP drift means tampering. It also flags a saved `lastSaveMs` that sits in the future, which means the clock was rewound between sessions. States: `OK`, `FIRST_RUN`, `REBOOT`, and tamper states with counters.
+[**`TimeIntegrityMonitor`**][timemon] — spots system-clock tampering by comparing the user-changeable wall clock (`System.currentTimeMillis`) against the monotonic `SystemClock.elapsedRealtime` within one boot session. Divergence beyond normal NTP drift means tampering. It also flags a saved `lastSaveMs` that sits in the future, which means the clock was rewound between sessions. States: `OK`, `FIRST_RUN`, `REBOOT`, and tamper states with counters.
 
-**`DataIntegrityMonitor`** - spots edits to `stepzc_prefs` made outside the app (root tools, ADB restore, prefs editors) using an HMAC-SHA256 tag over the step values. The key lives in the Android Keystore (`goforit_stepdata_hmac_v1`, sign/verify only), so even root can't forge a tag. Legitimate in-app writes re-sign automatically via `startMonitoring()`. A missing tag file alongside existing data also counts as tampering.
+[**`DataIntegrityMonitor`**][datamon] — spots edits to `stepzc_prefs` made outside the app (root tools, ADB restore, prefs editors) using an HMAC-SHA256 tag over the step values. The key lives in the Android Keystore (`goforit_stepdata_hmac_v1`, sign/verify only), so even root can't forge a tag. Legitimate in-app writes re-sign automatically via `startMonitoring()`. A missing tag file alongside existing data also counts as tampering.
 
 `snapshot()` returns both reports, so upload paths can hold back totals they don't trust.
 
-`DeviceIdentity` gives each install a random UUID plus a readable device name, used by the server's device-trust flow. Reinstalling produces a fresh identity on purpose.
+[`DeviceIdentity`][deviceid] gives each install a random UUID plus a readable device name. The backend exposes matching [`checkDeviceTrust` / `releaseDeviceTrust`][functions] callables for binding an account to one device; reinstalling produces a fresh identity on purpose.
 
 ---
 
@@ -184,15 +227,15 @@ The `feature.map` package gives a complete offline walking-route experience for 
 
 | Component | Role |
 |---|---|
-| `MapAndRoutesActivity` | The map screen: start/destination autocomplete, preference sliders, bottom sheet, route layers, 3D buildings, live location. |
-| `MbTilesServer` | A small NanoHTTPD server on port 8080 serving vector tiles from `assets/israel.mbtiles` (auto-detects TMS y-flip). |
-| `GhGraphInstaller` / `GraphDataInstaller` | Unzip the bundled GraphHopper foot graph into app storage. |
-| `OfflineRouter` | Loads the graph and computes offline foot routes. `RoutePrefs` carries the slider settings and extra-distance budget. |
-| `PoiDbInstaller` / `PoiRepository` | Install and query the SQLite POI database (H3-indexed, with a lat/lon fallback), bucketed by category. |
-| `H3OpeningScorer` | Scores possible detours using Uber H3 grid disks: finds POI-rich neighboring cells inside a bearing cone and distance budget, then inserts the best one into the route. |
-| `GeocoderApi` | The only online piece - Komoot Photon autocomplete, biased to Israel, Hebrew names where OSM has them. |
-| `IsraelBounds` | Camera and bounds constraints. |
-| `RoutePlanner` | Empty placeholder, reserved for future orchestration. |
+| [`MapAndRoutesActivity`][map] | The map screen: start/destination autocomplete, preference sliders, bottom sheet, route layers, 3D buildings, live location. |
+| [`MbTilesServer`][mbtiles] | A small NanoHTTPD server on port 8080 serving vector tiles from `assets/israel.mbtiles` (auto-detects TMS y-flip). |
+| [`GhGraphInstaller`][ghinstaller] / [`GraphDataInstaller`][graphinstaller] | Unzip the bundled GraphHopper foot graph into app storage. |
+| [`OfflineRouter`][router] | Loads the graph and computes offline foot routes. `RoutePrefs`, in the same file, carries the slider settings and extra-distance budget. |
+| [`PoiDbInstaller`][poidb] / [`PoiRepository`][poirepo] | Install and query the SQLite POI database (H3-indexed, with a lat/lon fallback), bucketed by category. |
+| [`H3OpeningScorer`][h3] | Scores possible detours using Uber H3 grid disks: finds POI-rich neighboring cells inside a bearing cone and distance budget, then inserts the best one into the route. |
+| [`GeocoderApi`][geocoder] | The only online piece — Komoot Photon autocomplete, biased to Israel, Hebrew names where OSM has them. |
+| [`IsraelBounds`][bounds] | Camera and bounds constraints. |
+| [`RoutePlanner`][routeplanner] | Empty placeholder, reserved for future orchestration. |
 
 The sliders let you trade distance for pleasantness: how much you want parks, quiet residential streets, or busy areas, plus how many extra kilometres you're willing to walk for it.
 
@@ -200,7 +243,7 @@ The sliders let you trade distance for pleasantness: how much you want parks, qu
 
 ## Backend
 
-`functions/src/index.ts` (~1,500 lines, TypeScript, Cloud Functions v2, region `us-central1`, Luxon for time, default timezone `Asia/Jerusalem`).
+[`functions/src/index.ts`][functions] (~2,640 lines, TypeScript, Cloud Functions v2, region `us-central1`, Luxon for time, default timezone `Asia/Jerusalem`).
 
 **Auth trigger:** `onAuthUserCreate` creates the `users/{uid}` document.
 
@@ -211,10 +254,12 @@ The sliders let you trade distance for pleasantness: how much you want parks, qu
 | `registerFcmToken` | Save the device's FCM token. |
 | `getMyProfile` / `updateMyProfile` | Read and update your own profile (name, faculty, timezone). |
 | `getPublicUserProfile` | Sanitized profile for competitor screens. |
-| `updateQuietHours` | Set the notification quiet window (default 22:00–08:00). |
+| `updateQuietHours` | Set the notification quiet window (default 22:00–08:00). Changing it resets learned reminder times. |
+| `checkDeviceTrust` / `releaseDeviceTrust` | Bind an account to one device identity, or release it. |
 | `uploadStepInterval` | Write one 4-hour bucket. Idempotent per `sessionId`; recomputes daily points and updates cumulative totals and the live leaderboard. |
-| `recordBonusVisit` | Award a BLE station visit, validated against `bonus_stations`. |
-| `syncCollegeAreaSteps` | Credit campus steps at 10 bonus points per newly accepted step. |
+| `recordBonusVisit` | Award a BLE station visit, once per day, validated against `bonus_stations`. Has a separate QA-only branch that logs evidence without awarding points. |
+| `syncCollegeAreaSteps` | Credit campus steps from the cumulative qualified total. |
+| `getMyPersonalChallenges` / `acceptPersonalChallenge` | Serve and accept challenge offers. |
 
 **Scheduled jobs**
 
@@ -224,7 +269,7 @@ The sliders let you trade distance for pleasantness: how much you want parks, qu
 | `dispatchNotificationJobs` | `*/15 * * * *` | Send up to 50 due jobs (`PENDING`, `sendAt <= now`) via FCM, honoring quiet hours. |
 | `finalizeMonth` | monthly | Monthly aggregation. |
 
-On the client, `FirebaseServerApi` (a Kotlin `object`) wraps email/password auth and every callable, plus helpers for the current `dayKey` and interval index. `firebaseMessagingService` displays incoming reminders on a high-importance `reminders` channel and respects the Android 13+ `POST_NOTIFICATIONS` permission.
+On the client, [`FirebaseServerApi`][api] (a Kotlin `object`) wraps email/password auth and every callable, plus profile-image upload to Firebase Storage and helpers for the current `dayKey` and interval index. [`firebaseMessagingService`][fcm] shows incoming reminders on a high-importance `reminders` channel and respects the Android 13+ `POST_NOTIFICATIONS` permission.
 
 ---
 
@@ -232,31 +277,37 @@ On the client, `FirebaseServerApi` (a Kotlin `object`) wraps email/password auth
 
 | Screen | What it shows |
 |---|---|
-| `LoginActivity` / `RegisterActivity` | Email/password auth. |
-| `MainActivity` | Navigation-drawer host (Steps, Home, Gallery, Slideshow, Sign out) and owner of the permission onboarding chain. Shows a status chip on the Steps destination. |
-| `StepsFragment` + `StepViewModel` | Live step count, cadence, motion mode (`ic_mode_*` icons), speed. |
-| `HomeFragment` / `GalleryFragment` / `SlideshowFragment` | Drawer destinations. Home also holds the QA entry card when authorized. |
-| `StatisticsActivity` + `HourlyStepsChartView` | Custom-drawn hourly and daily charts from the local stores. |
-| `LeaderboardActivity` (+ adapter, entry model) | Daily rankings with paging, day selection, and a faculty tab. |
-| `ProfileActivity` / `CompetitorProfileActivity` | Your profile and other users' public profiles. |
-| `PersonalChallengesActivity` | Challenge cards with countdowns, status pills, and the accept flow. |
-| `QaActivity` | Hidden acceptance-test console. |
+| [`LoginActivity`][login] / [`RegisterActivity`][register] | Email/password auth. |
+| [`MainActivity`][mainactivity] | Navigation-drawer host and owner of the permission onboarding chain. Shows a tracking status chip on the Steps destination. |
+| [`StepsFragment`][stepsfragment] + [`StepViewModel`][stepvm] | The real hub: live step count, cadence (SPM), speed, today's total, your avatar, and buttons into Map, Leaderboard, Statistics, and Profile. |
+| [`LeaderboardActivity`][leaderboard] (+ [adapter][lbadapter], [entry][lbentry], [view model][lbvm]) | Daily rankings with paging, date selection, and faculty standings. |
+| [`CompetitorProfileActivity`][competitor] | Another user's public profile. |
+| [`ProfileActivity`][profile] | Photo, username, faculty, quiet hours, timezone, and lifetime stats. |
+| [`StatisticsActivity`][stats] + [`HourlyStepsChartView`][chartview] | Custom-drawn hourly and daily charts from the local stores. |
+| [`PersonalChallengesActivity`][challenges] | Challenge cards with countdowns, status pills, and the accept flow. |
+| [`QaActivity`][qaactivity] | Hidden acceptance-test console. |
+| [`HomeFragment`][home] / [`GalleryFragment`][gallery] / [`SlideshowFragment`][slideshow] | The remaining drawer destinations, still on the Android Studio template. |
 
-Layouts use a `feature_*` / `nav_*` naming convention. Two nav graphs (`mobile_navigation.xml` and `nav_graph*.xml`) drive the drawer and secondary flows.
+Layouts follow a `feature_*` / `nav_*` naming convention — for example [`feature_steps_fragment.xml`][layoutsteps] and [`feature_leaderboard_activity.xml`][layoutleaderboard]. [`mobile_navigation.xml`][navgraph] drives the drawer.
 
 ---
 
 ## QA tools
 
-- **`QaAccess`** - a hard gate: the QA UI only appears and only opens when both the Firebase email (`goforit.qa@test.com`) and the UID match the dedicated tester account. Every QA screen re-checks, which blocks entry via an explicit Intent.
-- **`QaActivity`** - the in-app acceptance-test console (service state, stores, manual upload triggers, and so on).
-- **`grantQaTester.cjs` / `seedLeaderboardQa.cjs`** - Node scripts using Firebase Admin to grant the QA role and seed leaderboard test data.
+The console implements the three acceptance tests from the engineering report:
+
+1. **BLE reliability** — repeated runs entering a station's range, stored as immutable evidence documents (no points awarded).
+2. **Leaderboard performance** — measures how long the leaderboard takes to render fully.
+3. **Recoverability** — records the step count, forces a crash, and compares the count after restart.
+
+- [`QaAccess`][qaaccess] — a hard gate: the QA UI only opens when both the Firebase email (`goforit.qa@test.com`) and the UID match the dedicated tester account. [`QaActivity`][qaactivity] re-checks in `onCreate` and `onStart`, so an explicit Intent can't get in either. The QA branch of `recordBonusVisit` additionally requires the `qaTester: true` custom claim.
+- [`grantQaTester.cjs`][grantqa] / [`seedLeaderboardQa.cjs`][seedqa] — Node scripts using Firebase Admin to grant that claim and seed leaderboard test data.
 
 ---
 
 ## Permissions
 
-Declared in `AndroidManifest.xml`, scoped by SDK version where relevant.
+Declared in [`AndroidManifest.xml`][manifest], scoped by SDK version where relevant.
 
 - **Motion/health:** `ACTIVITY_RECOGNITION`, `BODY_SENSORS` (+ background), `HIGH_SAMPLING_RATE_SENSORS`
 - **Location:** `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`
@@ -264,7 +315,26 @@ Declared in `AndroidManifest.xml`, scoped by SDK version where relevant.
 - **Foreground services:** `FOREGROUND_SERVICE` plus the typed variants `LOCATION`, `HEALTH`, `DATA_SYNC`, `CONNECTED_DEVICE`
 - **Other:** `INTERNET`, `ACCESS_NETWORK_STATE`, `RECEIVE_BOOT_COMPLETED`, `POST_NOTIFICATIONS`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
 
-Registered components: 11 activities, `StepService`, `BleAdvertScanService`, `firebaseMessagingService`, `BootReceiver`, and WorkManager's foreground-service override.
+Registered components: 10 activities, [`StepService`][stepservice], [`BleAdvertScanService`][blescan], [`firebaseMessagingService`][fcm], [`BootReceiver`][bootreceiver], and WorkManager's foreground-service override.
+
+---
+
+## Code map
+
+The files worth opening first, in rough order of importance.
+
+| File | Size | Why it matters |
+|---|--:|---|
+| [`StepCounterZC.kt`][stepcounter] | ~1,160 lines | The step-detection algorithm and motion classifier. |
+| [`index.ts`][functions] | ~2,640 lines | Every scoring rule, challenge definition, and scheduled job. |
+| [`BleAdvertScanService.kt`][blescan] | ~920 lines | Beacon scanning, scan-mode cycling, watchdog. |
+| [`MapAndRoutesActivity.kt`][map] | ~860 lines | Offline map UI and route rendering. |
+| [`StepService.kt`][stepservice] | ~850 lines | Foreground service, location fixes, campus detection. |
+| [`MainActivity.kt`][mainactivity] | ~840 lines | Drawer host and permission onboarding chain. |
+| [`QaActivity.kt`][qaactivity] | ~670 lines | The three acceptance tests. |
+| [`FirebaseServerApi.kt`][api] | — | Every client→server call in one place. |
+| [`AntiCheatManager.kt`][anticheat] | — | Entry point to both integrity monitors. |
+| [`FourHourBucketsSinceBoot.kt`][buckets] | — | The bucketing logic behind uploads. |
 
 ---
 
@@ -281,30 +351,41 @@ app/src/main/java/com/example/goforitGit/
 │   └── util/
 │       ├── StepsUtils/         StepCounterZC, CollegeZoneChecker
 │       ├── FourHourBuckets/    FourHourBucketsSinceBoot, Scheduler, Worker
-│       ├── TrackingLifecycle/  TrackingHeartbeat, TrackingPrefs,
-│       │                       TrackingHealthWorker, TrackingServiceManager,
-│       │                       Trackingpermissions, Onboardingprefs
+│       ├── TrackingLifecycle/  Trackingheartbeat, TrackingPrefs,
+│       │                       TrackingServiceManager, Trackingpermissions,
+│       │                       Onboardingprefs
 │       ├── AntiCheat/          AntiCheatManager, TimeIntegrityMonitor,
 │       │                       DataIntegrityMonitor
 │       ├── DeviceSecurity/     DeviceIdentity
 │       └── Receivers/          BootReceiver
-├── tracking_lifecycle/         TrackingRestartWorker
+├── tracking_lifecycle/         TrackingHealthWorker, Trackingrestartworker
 ├── feature/
 │   ├── auth/ui/                LoginActivity, RegisterActivity
-│   ├── map/ (ui + data)        MapAndRoutesActivity, OfflineRouter, MbTilesServer,
-│   │                           H3OpeningScorer, PoiRepository, installers,
-│   │                           GeocoderApi, IsraelBounds, RoutePlanner
-│   ├── leaderboard/ui/         LeaderboardActivity/Adapter/Entry,
-│   │                           FacultyStanding(+Adapter), CompetitorProfileActivity
-│   ├── challenges/ui/          PersonalChallengesActivity, Personalchallengemodels
+│   ├── map/
+│   │   ├── ui/                 MapAndRoutesActivity
+│   │   └── data/               OfflineRouter, MbTilesServer, H3OpeningScorer,
+│   │                           PoiRepository, PoiDbInstaller, GhGraphInstaller,
+│   │                           GraphDataInstaller, GeocoderApi, IsraelBounds,
+│   │                           RoutePlanner
+│   ├── leaderboard/
+│   │   ├── ui/                 LeaderboardActivity, LeaderboardAdapter,
+│   │   │                       LeaderboardViewModel, Facultystandingadapter,
+│   │   │                       CompetitorProfileActivity
+│   │   └── model/              LeaderboardEntry, Facultystanding
+│   ├── challenges/
+│   │   ├── ui/                 PersonalChallengesActivity
+│   │   └── model/              Personalchallengemodels
 │   ├── statistics/ui/          StatisticsActivity, HourlyStepsChartView
 │   ├── profile/ui/             ProfileActivity
-│   └── qa/ui/                  QaActivity, QaAccess
-├── navigation/                 MainActivity
-└── ui/                         Home / Gallery / Slideshow / Steps + ViewModels
+│   ├── steps/                  ui/StepsFragment, viewmodel/StepViewModel
+│   ├── home, gallery, slideshow/  Fragment + ViewModel (template screens)
+│   └── qa/                     QaAccess, ui/QaActivity
+└── navigation/                 MainActivity
 
+app/src/main/res/               layout/, drawable/, menu/, navigation/, values/
 functions/src/index.ts          All Cloud Functions
 tools/                          grantQaTester.cjs, seedLeaderboardQa.cjs
+docs/screenshots/               README images
 ```
 
 ---
@@ -313,8 +394,8 @@ tools/                          grantQaTester.cjs, seedLeaderboardQa.cjs
 
 **You'll need**
 
-- Android Studio with a recent AGP, and Kotlin. The root `build.gradle.kts` applies `com.google.gms.google-services 4.4.4` and `com.chaquo.python 17.0.0` (Chaquopy, used at build time).
-- A Firebase project with Email/Password auth, Firestore, Cloud Functions (`us-central1`), and FCM. Put your `google-services.json` in `app/`.
+- Android Studio with a recent AGP, and Kotlin. The root [`build.gradle.kts`][gradle] applies `com.google.gms.google-services 4.4.4` and `com.chaquo.python 17.0.0` (Chaquopy, used at build time).
+- A Firebase project with Email/Password auth, Firestore, Cloud Functions (`us-central1`), Storage (profile images), and FCM. Put your `google-services.json` in `app/`.
 - Node.js for the `functions/` workspace (Functions v2 + `luxon`). Deploy with `firebase deploy --only functions`.
 
 **Bundled assets** (large binaries, not in this source snapshot)
@@ -326,7 +407,7 @@ tools/                          grantQaTester.cjs, seedLeaderboardQa.cjs
 | `assets/poi_h3.db` (or a DB under `assets/poi/`) | POI database |
 | `assets/college_polygon.json` | Campus geofence |
 
-**Main libraries:** MapLibre GL, GraphHopper core, Uber H3, NanoHTTPD, Play Services Location, WorkManager, Firebase (Auth / Functions / Messaging), Material Components, AndroidX Navigation.
+**Main libraries:** MapLibre GL, GraphHopper core, Uber H3, NanoHTTPD, Play Services Location, WorkManager, Firebase (Auth / Firestore / Functions / Storage / Messaging), Material Components, AndroidX Navigation.
 
 **Bonus-station hardware:** Raspberry Pi 5 units advertising BLE manufacturer data under company ID `0xFFFF` with the device name `RPi5 Beacon`.
 
@@ -336,8 +417,77 @@ tools/                          grantQaTester.cjs, seedLeaderboardQa.cjs
 
 ## Design principles
 
-- **The server decides.** Points, leaderboards, challenge math, and bonus validation all happen in Cloud Functions. The client uploads raw measurements and renders whatever comes back.
-- **Uploads are safe to retry.** Session IDs, per-interval sent flags, and the `uploadedMask` bitmask make every upload idempotent and resumable.
-- **One restart path.** Boot, watchdog, and crash recovery all go through the same foreground-elevated `TrackingRestartWorker`.
+- **The server decides.** Points, leaderboards, challenge math, and bonus validation all happen in [Cloud Functions][functions]. The client uploads raw measurements and renders whatever comes back.
+- **Uploads are safe to retry.** Session IDs, per-interval sent flags, the `uploadedMask` bitmask, and cumulative-total bonus math make every upload idempotent and resumable.
+- **One restart path.** Boot, watchdog, and crash recovery all go through the same foreground-elevated [`TrackingRestartWorker`][restartworker].
 - **Detectors stay out of the way.** Anti-cheat modules only read the counter's data, so the counting code stays independent of them.
 - **Offline first.** Tiles, routing graph, and POIs ship inside the APK. Only name autocomplete needs a connection.
+
+<!-- ─────────────────────── link definitions ─────────────────────── -->
+
+[stepcounter]: app/src/main/java/com/example/goforitGit/core/util/StepsUtils/StepCounterZC.kt
+[collegezone]: app/src/main/java/com/example/goforitGit/core/util/StepsUtils/CollegeZoneChecker.kt
+[stepbus]: app/src/main/java/com/example/goforitGit/core/data/StepsData/StepBus.kt
+[steprepo]: app/src/main/java/com/example/goforitGit/core/data/StepsData/StepRepository.kt
+[stephistory]: app/src/main/java/com/example/goforitGit/core/data/StepsData/StepHistoryStore.kt
+[dailysteps]: app/src/main/java/com/example/goforitGit/core/data/StepsData/DailyStepsStore.kt
+[buckets]: app/src/main/java/com/example/goforitGit/core/util/FourHourBuckets/FourHourBucketsSinceBoot.kt
+[uploadsched]: app/src/main/java/com/example/goforitGit/core/util/FourHourBuckets/FourHourUploadScheduler.kt
+[uploadworker]: app/src/main/java/com/example/goforitGit/core/util/FourHourBuckets/FourHourUploadWorker.kt
+[stepservice]: app/src/main/java/com/example/goforitGit/core/service/StepService.kt
+[blescan]: app/src/main/java/com/example/goforitGit/core/service/BleAdvertScanService.kt
+[api]: app/src/main/java/com/example/goforitGit/core/data/FirebaseData/FirebaseServerApi.kt
+[fcm]: app/src/main/java/com/example/goforitGit/core/data/FirebaseData/firebaseMessagingService.kt
+[heartbeat]: app/src/main/java/com/example/goforitGit/core/util/TrackingLifecycle/Trackingheartbeat.kt
+[trackprefs]: app/src/main/java/com/example/goforitGit/core/util/TrackingLifecycle/TrackingPrefs.kt
+[svcmanager]: app/src/main/java/com/example/goforitGit/core/util/TrackingLifecycle/TrackingServiceManager.kt
+[perms]: app/src/main/java/com/example/goforitGit/core/util/TrackingLifecycle/Trackingpermissions.kt
+[onboardprefs]: app/src/main/java/com/example/goforitGit/core/util/TrackingLifecycle/Onboardingprefs.kt
+[healthworker]: app/src/main/java/com/example/goforitGit/tracking_lifecycle/TrackingHealthWorker.kt
+[restartworker]: app/src/main/java/com/example/goforitGit/tracking_lifecycle/Trackingrestartworker.kt
+[bootreceiver]: app/src/main/java/com/example/goforitGit/core/util/Receivers/BootReceiver.kt
+[anticheat]: app/src/main/java/com/example/goforitGit/core/util/AntiCheat/AntiCheatManager.kt
+[timemon]: app/src/main/java/com/example/goforitGit/core/util/AntiCheat/TimeIntegrityMonitor.kt
+[datamon]: app/src/main/java/com/example/goforitGit/core/util/AntiCheat/DataIntegrityMonitor.kt
+[deviceid]: app/src/main/java/com/example/goforitGit/core/util/DeviceSecurity/DeviceIdentity.kt
+[map]: app/src/main/java/com/example/goforitGit/feature/map/ui/MapAndRoutesActivity.kt
+[mbtiles]: app/src/main/java/com/example/goforitGit/feature/map/data/MbTilesServer.kt
+[ghinstaller]: app/src/main/java/com/example/goforitGit/feature/map/data/GhGraphInstaller.kt
+[graphinstaller]: app/src/main/java/com/example/goforitGit/feature/map/data/GraphDataInstaller.kt
+[router]: app/src/main/java/com/example/goforitGit/feature/map/data/OfflineRouter.kt
+[poidb]: app/src/main/java/com/example/goforitGit/feature/map/data/PoiDbInstaller.kt
+[poirepo]: app/src/main/java/com/example/goforitGit/feature/map/data/PoiRepository.kt
+[h3]: app/src/main/java/com/example/goforitGit/feature/map/data/H3OpeningScorer.kt
+[geocoder]: app/src/main/java/com/example/goforitGit/feature/map/data/GeocoderApi.kt
+[bounds]: app/src/main/java/com/example/goforitGit/feature/map/data/IsraelBounds.kt
+[routeplanner]: app/src/main/java/com/example/goforitGit/feature/map/data/RoutePlanner.kt
+[login]: app/src/main/java/com/example/goforitGit/feature/auth/ui/LoginActivity.kt
+[register]: app/src/main/java/com/example/goforitGit/feature/auth/ui/RegisterActivity.kt
+[leaderboard]: app/src/main/java/com/example/goforitGit/feature/leaderboard/ui/LeaderboardActivity.kt
+[lbadapter]: app/src/main/java/com/example/goforitGit/feature/leaderboard/ui/LeaderboardAdapter.kt
+[lbvm]: app/src/main/java/com/example/goforitGit/feature/leaderboard/ui/LeaderboardViewModel.kt
+[lbentry]: app/src/main/java/com/example/goforitGit/feature/leaderboard/model/LeaderboardEntry.kt
+[faculty]: app/src/main/java/com/example/goforitGit/feature/leaderboard/model/Facultystanding.kt
+[facultyadapter]: app/src/main/java/com/example/goforitGit/feature/leaderboard/ui/Facultystandingadapter.kt
+[competitor]: app/src/main/java/com/example/goforitGit/feature/leaderboard/ui/CompetitorProfileActivity.kt
+[challenges]: app/src/main/java/com/example/goforitGit/feature/challenges/ui/PersonalChallengesActivity.kt
+[challengemodels]: app/src/main/java/com/example/goforitGit/feature/challenges/model/Personalchallengemodels.kt
+[stats]: app/src/main/java/com/example/goforitGit/feature/statistics/ui/StatisticsActivity.kt
+[chartview]: app/src/main/java/com/example/goforitGit/feature/statistics/ui/HourlyStepsChartView.kt
+[profile]: app/src/main/java/com/example/goforitGit/feature/profile/ui/ProfileActivity.kt
+[stepsfragment]: app/src/main/java/com/example/goforitGit/feature/steps/ui/StepsFragment.kt
+[stepvm]: app/src/main/java/com/example/goforitGit/feature/steps/viewmodel/StepViewModel.kt
+[home]: app/src/main/java/com/example/goforitGit/feature/home/ui/HomeFragment.kt
+[gallery]: app/src/main/java/com/example/goforitGit/feature/gallery/ui/GalleryFragment.kt
+[slideshow]: app/src/main/java/com/example/goforitGit/feature/slideshow/ui/SlideshowFragment.kt
+[qaaccess]: app/src/main/java/com/example/goforitGit/feature/qa/QaAccess.kt
+[qaactivity]: app/src/main/java/com/example/goforitGit/feature/qa/ui/QaActivity.kt
+[mainactivity]: app/src/main/java/com/example/goforitGit/navigation/MainActivity.kt
+[manifest]: app/src/main/AndroidManifest.xml
+[layoutsteps]: app/src/main/res/layout/feature_steps_fragment.xml
+[layoutleaderboard]: app/src/main/res/layout/feature_leaderboard_activity.xml
+[navgraph]: app/src/main/res/navigation/mobile_navigation.xml
+[functions]: functions/src/index.ts
+[grantqa]: tools/grantQaTester.cjs
+[seedqa]: tools/seedLeaderboardQa.cjs
+[gradle]: build.gradle.kts
