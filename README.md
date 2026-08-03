@@ -50,33 +50,15 @@ Engineering final project by **Maor Mordo & Idan Meir**.
 
 ## Screenshots
 
-Images live in [`docs/screenshots/`](docs/screenshots). Drop your captures there using the file names below and they will show up here automatically.
+| Steps hub | Leaderboard | Personal challenges | Statistics |
+|:--:|:--:|:--:|:--:|
+| <img src="docs/screenshots/steps.jpeg" width="200" alt="Steps screen"> | <img src="docs/screenshots/leaderboard.jpeg" width="200" alt="Daily leaderboard"> | <img src="docs/screenshots/challenges.jpeg" width="200" alt="Personal challenges"> | <img src="docs/screenshots/statistics.jpeg" width="200" alt="Statistics"> |
+| Live steps, cadence, speed, today's total, and the way into every other screen | Daily ranking with date picker, paging, "my rank", and faculty standings | Offers with difficulty tiers, countdowns, and progress | Hourly and daily step charts drawn from the local stores |
 
-| Steps hub | Leaderboard | Faculty standings |
+| Map & routes | Profile | QA console |
 |:--:|:--:|:--:|
-| <img src="docs/screenshots/steps.png" width="230" alt="Steps screen"> | <img src="docs/screenshots/leaderboard.png" width="230" alt="Daily leaderboard"> | <img src="docs/screenshots/faculties.png" width="230" alt="Faculty standings"> |
-| Live steps, cadence, speed, today's total, and the way into every other screen | Daily ranking with date picker, paging, and "my rank" | Per-faculty totals and averages, frozen nightly |
-
-| Personal challenges | Statistics | Map & routes |
-|:--:|:--:|:--:|
-| <img src="docs/screenshots/challenges.png" width="230" alt="Personal challenges"> | <img src="docs/screenshots/statistics.png" width="230" alt="Statistics"> | <img src="docs/screenshots/map.png" width="230" alt="Offline map and route planner"> |
-| Offers with difficulty tiers, countdowns, and progress | Hourly and daily step charts drawn from the local stores | Offline vector map, autocomplete, and a scenic-detour route |
-
-| Profile | Login | QA console |
-|:--:|:--:|:--:|
-| <img src="docs/screenshots/profile.png" width="230" alt="Profile"> | <img src="docs/screenshots/login.png" width="230" alt="Login"> | <img src="docs/screenshots/qa.png" width="230" alt="QA console"> |
-| Photo, faculty, quiet hours, timezone, lifetime stats | Email/password sign-in and registration | The three acceptance tests, tester account only |
-
-<details>
-<summary>How to capture new screenshots</summary>
-
-```bash
-adb exec-out screencap -p > docs/screenshots/steps.png
-```
-
-Or use **Android Studio → Running Devices → Screenshot**. Keep the same device and orientation for every shot so the images line up in the tables above.
-
-</details>
+| <img src="docs/screenshots/maps.jpeg" width="200" alt="Offline map and route planner"> | <img src="docs/screenshots/profile.jpeg" width="200" alt="Profile"> | <img src="docs/screenshots/QA.jpeg" width="200" alt="QA console"> |
+| Offline vector map, autocomplete, preference sliders, and a scenic-detour route | Photo, faculty, quiet hours, timezone, and lifetime stats | The three acceptance tests, tester account only |
 
 ---
 
@@ -385,7 +367,7 @@ app/src/main/java/com/example/goforitGit/
 app/src/main/res/               layout/, drawable/, menu/, navigation/, values/
 functions/src/index.ts          All Cloud Functions
 tools/                          grantQaTester.cjs, seedLeaderboardQa.cjs
-docs/screenshots/               README images
+docs/screenshots/               Screenshots used in this README
 ```
 
 ---
