@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
+import com.example.goforitGit.core.util.AntiCheat.AntiCheatGate
 import com.google.firebase.auth.FirebaseAuth
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -22,6 +23,12 @@ class FourHourUploadWorker(
             FourHourUploadScheduler.scheduleNext(applicationContext)
             return Result.success()
         }
+
+        // Evaluated once per run, immediately before anything leaves the device.
+        // Both branches below (the 00:05 catch-up and the normal boundary
+        // upload) send the same verdict, so a single day cannot end up with some
+        // intervals marked trustworthy and others not for the same device state.
+        val integrityOk = AntiCheatGate.evaluate(applicationContext, "interval")
 
         val now = ZonedDateTime.now(zone)
         val currentInterval = (now.hour / 4).coerceIn(0, 5)
@@ -43,9 +50,10 @@ class FourHourUploadWorker(
                     val r = FirebaseServerApi.uploadStepIntervalResult(
                         dayKey = yesterdayKey,
                         intervalIndex = 5,
-                        stepsTotal = steps5,              // ✅ FIXED
+                        stepsTotal = steps5,
                         uploadIntervalIndex = 0,
-                        attributedIntervalIndex = 5
+                        attributedIntervalIndex = 5,
+                        integrityOk = integrityOk
                     )
 
                     if (r.isFailure) {
@@ -74,9 +82,10 @@ class FourHourUploadWorker(
             val r = FirebaseServerApi.uploadStepIntervalResult(
                 dayKey = dayKey,
                 intervalIndex = intervalToUpload,
-                stepsTotal = stepsTotal,               // ✅ FIXED
+                stepsTotal = stepsTotal,
                 uploadIntervalIndex = currentInterval,
-                attributedIntervalIndex = intervalToUpload
+                attributedIntervalIndex = intervalToUpload,
+                integrityOk = integrityOk
             )
 
             if (r.isFailure) {

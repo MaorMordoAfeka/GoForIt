@@ -23,6 +23,7 @@ import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
 import com.example.goforitGit.core.data.StepsData.DailyStepsStore
 import com.example.goforitGit.core.data.StepsData.StepBus
 import com.example.goforitGit.core.data.StepsData.StepHistoryStore
+import com.example.goforitGit.core.util.AntiCheat.AntiCheatGate
 import com.example.goforitGit.core.util.FourHourBuckets.FourHourBucketsSinceBoot
 import com.example.goforitGit.core.util.FourHourBuckets.FourHourUploadScheduler
 import com.example.goforitGit.core.util.StepsUtils.CollegeZoneChecker
@@ -596,7 +597,8 @@ class StepService : Service() {
                 val result = FirebaseServerApi.syncCollegeAreaStepsResult(
                     dayKey = latest.dayKey,
                     qualifiedStepsTotal = latest.qualifiedSteps,
-                    observedAtMs = nowMs
+                    observedAtMs = nowMs,
+                    integrityOk = AntiCheatGate.evaluate(applicationContext, "campus")
                 )
 
                 result

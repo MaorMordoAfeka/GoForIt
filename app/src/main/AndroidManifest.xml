@@ -31,9 +31,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" /> <!-- Alarms -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
+    <!-- android:name="com.chaquo.python.android.PyApplication" -->
+    <!-- android:allowBackup="false" -->
     <application
-        android:name="com.chaquo.python.android.PyApplication"
-        android:allowBackup="true"
+        android:name=".GoForItApp"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"

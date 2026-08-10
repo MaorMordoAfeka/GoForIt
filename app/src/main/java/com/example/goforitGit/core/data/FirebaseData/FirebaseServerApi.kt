@@ -465,13 +465,17 @@ object FirebaseServerApi {
     // -------------------------------------------------------------------------
 
     /**
-     * Uploads step totals for a given day and 4-hour interval.
+     * Uploads the cumulative step total for one 4-hour interval.
      *
-     * Server-side intent:
-     * - Save the user's steps per interval so the backend can:
-     *   - determine the best interval at end-of-day
-     *   - learn monthly patterns
-     *   - schedule reminders outside the user's quiet hours
+     * @param integrityOk false when AntiCheatGate detected a wall-clock rewind /
+     *        forward jump, or an out-of-band edit to the local step store.
+     *
+     *        The flag travels WITH the payload instead of suppressing it. If the
+     *        client simply withheld a flagged upload, the user would lose their
+     *        steps while the server retained no record of why — no audit trail,
+     *        no uniform policy, and nothing to review if the user appeals. Since
+     *        the server is already the sole authority on scoring, it should also
+     *        own the decision about what a flagged upload is worth.
      */
     suspend fun uploadStepIntervalResult(
         dayKey: String,
@@ -479,6 +483,7 @@ object FirebaseServerApi {
         stepsTotal: Int,
         uploadIntervalIndex: Int = intervalIndex,
         attributedIntervalIndex: Int = intervalIndex,
+        integrityOk: Boolean = true,
     ): Result<Boolean> {
         val uidCheck = requireUid()
         if (uidCheck.isFailure) return Result.failure(uidCheck.exceptionOrNull()!!)
@@ -489,6 +494,7 @@ object FirebaseServerApi {
             "stepsTotal" to stepsTotal,
             "uploadIntervalIndex" to uploadIntervalIndex,
             "attributedIntervalIndex" to attributedIntervalIndex,
+            "integrityOk" to integrityOk,
         )
         return callOkResult("uploadStepInterval", data)
     }
@@ -578,13 +584,22 @@ object FirebaseServerApi {
      *
      * Important:
      * - The client sends a cumulative total, not a delta.
-     * - The server advances only if the submitted total is higher than what it already has.
-     *   This makes retries and restarts idempotent.
+     * - The server advances only if the submitted total is higher than what it
+     *   already has. This makes retries and restarts idempotent.
+     *
+     * @param integrityOk see [uploadStepIntervalResult].
+     *
+     *        This is the single most valuable thing in the app to forge: the
+     *        server awards COLLEGE_AREA_BONUS_POINTS_PER_STEP (10) points per
+     *        campus step, against calcStepPoints' 1 point per 100 ordinary
+     *        steps — three orders of magnitude apart. A flagged campus sync
+     *        therefore matters far more than a flagged interval upload.
      */
     suspend fun syncCollegeAreaStepsResult(
         dayKey: String,
         qualifiedStepsTotal: Int,
         observedAtMs: Long = System.currentTimeMillis(),
+        integrityOk: Boolean = true,
     ): Result<Boolean> {
         val uidCheck = requireUid()
         if (uidCheck.isFailure) {
@@ -602,6 +617,7 @@ object FirebaseServerApi {
             "dayKey" to dayKey,
             "qualifiedStepsTotal" to qualifiedStepsTotal,
             "observedAtMs" to observedAtMs,
+            "integrityOk" to integrityOk,
         )
 
         return callOkResult("syncCollegeAreaSteps", data)

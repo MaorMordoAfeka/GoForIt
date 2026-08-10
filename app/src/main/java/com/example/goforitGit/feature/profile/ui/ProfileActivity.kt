@@ -23,6 +23,7 @@ import androidx.core.widget.ImageViewCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.goforitGit.R
 import com.example.goforitGit.core.data.FirebaseData.FirebaseServerApi
+import com.example.goforitGit.core.util.DeviceSecurity.DeviceIdentity
 import com.example.goforitGit.databinding.FeatureProfileActivityBinding
 import com.example.goforitGit.navigation.DrawerNavigator
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -718,9 +719,13 @@ class ProfileActivity : AppCompatActivity() {
 
     private fun confirmSignOut() {
         val proceed = {
-            FirebaseServerApi.signOut()
-            toast("Signed out.")
-            finish()
+            lifecycleScope.launch {
+                releaseDeviceTrustSafely()
+                FirebaseServerApi.signOut()
+                toast("Signed out.")
+                finish()
+            }
+            Unit
         }
         if (isAnyFieldDirty()) {
             confirmAction(
@@ -735,6 +740,26 @@ class ProfileActivity : AppCompatActivity() {
                 confirmLabel = "Sign out"
             ) { proceed() }
         }
+    }
+
+    /**
+     * Frees this account's device slot before dropping the auth token.
+     *
+     * Order matters and is not optional: releaseDeviceTrust is an authenticated
+     * callable, so once signOut() has run there is no uid and the slot can never
+     * be released — not from this device, not from any other. The account would
+     * be permanently locked out with no recovery path.
+     *
+     * MainActivity.signOutAndGoToLogin() already does this; this screen is the
+     * second sign-out path and needs identical treatment.
+     */
+    private suspend fun releaseDeviceTrustSafely() {
+        val deviceId = DeviceIdentity.getOrCreateDeviceId(this@ProfileActivity)
+        runCatching { FirebaseServerApi.releaseDeviceTrustResult(deviceId) }
+            .getOrNull()
+            ?.onFailure { e ->
+                Log.e("AUTH", "releaseDeviceTrust failed: ${e.message}", e)
+            }
     }
 
     private fun confirmAction(

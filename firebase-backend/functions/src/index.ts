@@ -1260,6 +1260,15 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
   const intervalIndex = validateInterval(request.data?.intervalIndex, "intervalIndex");
   const stepsTotal = validateSteps(request.data?.stepsTotal);
 
+  // Client-reported local integrity, produced by AntiCheatGate on the device
+  // (clock-manipulation and local step-store tampering detectors).
+  //
+  // Defaults to true so installs that predate the field keep working during
+  // rollout. The flag is recorded, not enforced: withholding a flagged upload
+  // client-side would cost the user their steps while leaving the server with
+  // no record, no audit trail and nothing to review if the user appeals.
+  const integrityOk = request.data?.integrityOk !== false;
+
   const uploadIntervalIndex =
     request.data?.uploadIntervalIndex == null
       ? intervalIndex
@@ -1296,7 +1305,18 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
 
     // --- Mutate and compute NEW daily totals ---
     const stepsByInterval = [...oldStepsByInterval];
-    stepsByInterval[attributedIntervalIndex] = stepsTotal;
+
+    // Monotonic, not merely idempotent.
+    //
+    // Plain assignment let a late or lower payload SHRINK a day that was already
+    // recorded - reachable after a reinstall, a bucket reset, or a second device
+    // uploading the same interval. syncCollegeAreaSteps already guards this with
+    // Math.max; this brings uploadStepInterval in line so both upload paths
+    // behave identically.
+    stepsByInterval[attributedIntervalIndex] = Math.max(
+      oldStepsByInterval[attributedIntervalIndex],
+      stepsTotal
+    );
 
     const sumIntervals = stepsByInterval.reduce((a, b) => a + b, 0);
     const newTotalSteps = sumIntervals;
@@ -1317,6 +1337,10 @@ export const uploadStepInterval = onCall({ region: FUNCTIONS_REGION }, async (re
         startAt: admin.firestore.Timestamp.fromDate(start.toJSDate()),
         endAt: admin.firestore.Timestamp.fromDate(end.toJSDate()),
         stepsTotal,
+        integrityOk,
+        ...(integrityOk
+          ? {}
+          : { flaggedAt: admin.firestore.FieldValue.serverTimestamp() }),
         uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -1580,6 +1604,11 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
   const dayKey = validateDayKey(request.data?.dayKey);
   const qualifiedStepsTotal = validateQualifiedStepsTotal(request.data?.qualifiedStepsTotal);
 
+  // See uploadStepInterval. This path matters more: a campus step earns a bonus
+  // on top of its normal value, so forging campus activity is the highest-value
+  // manipulation available in the app.
+  const integrityOk = request.data?.integrityOk !== false;
+
   const observedAtMsRaw = request.data?.observedAtMs as unknown;
   const observedAtMs =
     typeof observedAtMsRaw === "number" && Number.isInteger(observedAtMsRaw) && observedAtMsRaw > 0
@@ -1628,6 +1657,10 @@ export const syncCollegeAreaSteps = onCall({ region: FUNCTIONS_REGION }, async (
         dayKey,
         collegeAreaQualifiedSteps: acceptedQualifiedSteps,
         collegeAreaBonusPoints,
+        collegeAreaIntegrityOk: integrityOk,
+        ...(integrityOk
+          ? {}
+          : { collegeAreaFlaggedAt: admin.firestore.FieldValue.serverTimestamp() }),
         bonusPoints: prevBonusPoints + bonusDelta,
         collegeAreaLastObservedAt: admin.firestore.Timestamp.fromMillis(observedAtMs),
         collegeAreaLastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
