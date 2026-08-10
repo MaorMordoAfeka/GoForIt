@@ -1,0 +1,21 @@
+[Unit]
+Description=BLE Broadcaster (RPi5 using bluezero)
+After=bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+
+# Use the Python inside your virtualenv
+ExecStart=sudo /opt/ble-venv/bin/python /home/raspberrypi/Desktop/ble_broadcaster.py
+
+# Restart if it crashes
+Restart=always
+RestartSec=5
+
+# Nice to have: unbuffered output for clearer logs
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+
