@@ -595,37 +595,68 @@ async function writeLeaderboardForDay(dayKey: string, leaderboard: LeaderboardRo
   await writeFacultyStandingsForDay(dayKey, leaderboard);
 }
 
+/** Max concurrent daily-document reads. See recalculateLeaderboardForDay. */
+const LEADERBOARD_READ_BATCH_SIZE = 50;
+
+/**
+ * Rebuilds the individual leaderboard (and, through writeLeaderboardForDay, the
+ * faculty standings) for one day.
+ *
+ * Reads are issued in bounded parallel batches rather than one at a time. The
+ * previous version awaited inside the loop, so wall time grew linearly with the
+ * number of accounts: N users meant N sequential round-trips before the rows
+ * could even be sorted, on a function that runs after every interval upload,
+ * every awarded bonus visit, every campus sync and every granted challenge.
+ *
+ * The batch cap matters as much as the parallelism: an unbounded Promise.all
+ * over every user would open one connection per account at once and trade a
+ * latency problem for a connection-pool problem.
+ *
+ * Output is unchanged. The same documents are read, the same users are skipped
+ * when they have no daily document, and ordering is decided afterwards by
+ * compareLeaderboardRows, so completion order cannot affect the result.
+ */
 async function recalculateLeaderboardForDay(dayKey: string): Promise<void> {
   const usersSnap = await db.collection("users").get();
   const leaderboard: LeaderboardRow[] = [];
 
-  for (const u of usersSnap.docs) {
-    const uid = u.id;
-    const userData = u.data() ?? {};
+  for (let i = 0; i < usersSnap.docs.length; i += LEADERBOARD_READ_BATCH_SIZE) {
+    const batch = usersSnap.docs.slice(i, i + LEADERBOARD_READ_BATCH_SIZE);
 
-    const username = typeof userData.username === "string" ? userData.username : "";
-    const profileImageUrl =
-      typeof userData.profileImageUrl === "string" ? userData.profileImageUrl : "";
-    const faculty = typeof userData.faculty === "string" ? userData.faculty : "";
+    const rows = await Promise.all(
+      batch.map(async (u): Promise<LeaderboardRow | null> => {
+        const uid = u.id;
+        const userData = u.data() ?? {};
 
-    const dailySnap = await db.doc(`users/${uid}/daily/${dayKey}`).get();
-    if (!dailySnap.exists) continue;
+        const username = typeof userData.username === "string" ? userData.username : "";
+        const profileImageUrl =
+          typeof userData.profileImageUrl === "string" ? userData.profileImageUrl : "";
+        const faculty = typeof userData.faculty === "string" ? userData.faculty : "";
 
-    const daily = dailySnap.data() ?? {};
-    const stepsByInterval = clampSix(daily.stepsByInterval);
-    const totalSteps = stepsByInterval.reduce((a, b) => a + b, 0);
-    const bonusPoints = Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
-    const totalPoints = calcStepPoints(totalSteps) + bonusPoints;
+        const dailySnap = await db.doc(`users/${uid}/daily/${dayKey}`).get();
+        if (!dailySnap.exists) return null;
 
-    leaderboard.push({
-      uid,
-      totalPoints,
-      totalSteps,
-      bonusPoints,
-      username,
-      profileImageUrl,
-      faculty,
-    });
+        const daily = dailySnap.data() ?? {};
+        const stepsByInterval = clampSix(daily.stepsByInterval);
+        const totalSteps = stepsByInterval.reduce((a, b) => a + b, 0);
+        const bonusPoints = Number.isInteger(daily.bonusPoints) ? (daily.bonusPoints as number) : 0;
+        const totalPoints = calcStepPoints(totalSteps) + bonusPoints;
+
+        return {
+          uid,
+          totalPoints,
+          totalSteps,
+          bonusPoints,
+          username,
+          profileImageUrl,
+          faculty,
+        };
+      })
+    );
+
+    for (const row of rows) {
+      if (row !== null) leaderboard.push(row);
+    }
   }
 
   leaderboard.sort(compareLeaderboardRows);
