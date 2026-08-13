@@ -100,6 +100,11 @@ class StepCounterZC private constructor(
         /** EMA weight for updating cadence estimate */
         private const val ALPHA_W = 0.22f
 
+        // --- History Retention ---
+
+        /** Keep detailed step timestamps for the last 3 days */
+        private const val STEP_HISTORY_RETENTION_MS = 3L * 24L * 60L * 60L * 1000L
+
         // --- Logging Tags ---
 
         private const val TAG_DIAG = "STEPDIAG"
@@ -217,17 +222,28 @@ class StepCounterZC private constructor(
     private val powerManager: PowerManager =
         context.getSystemService(Context.POWER_SERVICE) as PowerManager
 
-    private fun isPowerSaveMode(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            powerManager.isPowerSaveMode
-        } else {
-            false
-        }
-    }
+    private fun isPowerSaveMode(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && powerManager.isPowerSaveMode
 
-    private fun useHardwareOnlyForCounting(): Boolean {
-        return isPowerSaveMode() && stepSensor != null
-    }
+    private fun useHardwareOnlyForCounting(): Boolean =
+        isPowerSaveMode() && stepSensor != null
+
+    /** True when the classified motion mode is walking or running. */
+    private fun isOnFootMode(mode: MotionMode): Boolean =
+        mode == MotionMode.WALKING || mode == MotionMode.RUNNING
+
+    /**
+     * True when we have enough evidence to treat the user as being on foot.
+     * UNKNOWN can still count as on-foot when the accelerometer strongly suggests it.
+     */
+    private fun hasOnFootContext(mode: MotionMode): Boolean =
+        isOnFootMode(mode) || (mode == MotionMode.UNKNOWN && accOnFootLikelyNow)
+
+    private fun isVehicleMode(mode: MotionMode): Boolean =
+        mode == MotionMode.DRIVING || mode == MotionMode.CYCLING
+
+    private fun isAntiTiltActive(nowMs: Long): Boolean =
+        nowMs < max(spinBlockUntilMs, tiltBlockUntilMs)
 
     // endregion
 
@@ -542,14 +558,11 @@ class StepCounterZC private constructor(
         }
 
         val currentMode = _mode.value
-        val onFootContext =
-                (currentMode == MotionMode.WALKING) ||
-                (currentMode == MotionMode.RUNNING) ||
-                (currentMode == MotionMode.UNKNOWN && accOnFootLikelyNow)
+        val onFootContext = hasOnFootContext(currentMode)
 
         val speedKmh: Float? = latestSpeedMps?.times(3.6f)
         val lowSpeed = speedKmh != null && speedKmh < 1.0f
-        val antiTiltActive = nowMs < max(spinBlockUntilMs, tiltBlockUntilMs)
+        val antiTiltActive = isAntiTiltActive(nowMs)
 
         // Check for flip-like activity (tilting phone while stationary)
         val flipLikely = !onFootContext && (speedKmh == null || lowSpeed) && antiTiltActive && delta >= 1
@@ -734,7 +747,10 @@ class StepCounterZC private constructor(
     private fun processStepDetection(v: Float, vRatio: Float, nowMs: Long) {
         when (phase) {
             Phase.IDLE -> {
-                if (v > thrHigh && vRatio >= VDOM_MIN) {
+                val strongUpwardMovement = v > thrHigh
+                val sufficientlyVertical = vRatio >= VDOM_MIN
+
+                if (strongUpwardMovement && sufficientlyVertical) {
                     phase = Phase.ARMED_UP
                     posPeak = v
                     negPeak = 0f
@@ -745,27 +761,34 @@ class StepCounterZC private constructor(
                 if (v > posPeak) posPeak = v
                 if (v < negPeak) negPeak = v
 
+                // A candidate step is evaluated only after the signal crosses downward.
                 if (v < -thrLow) {
-                    val tNow = tSeconds
+                    val currentTimeS = tSeconds
                     var accepted = false
                     var reason: String
 
                     if (lastDownS > 0f) {
-                        val W = tNow - lastDownS
-                        if (W in W_MIN..W_MAX) {
-                            wEst = if (wEst <= 0f) W else (1f - ALPHA_W) * wEst + ALPHA_W * W
-                            val tol = max(DELTA_MIN, DELTA_FRAC * wEst)
+                        val stepPeriodS = currentTimeS - lastDownS
 
-                            if (abs(W - wEst) <= tol) {
-                                val amp = posPeak - negPeak
-                                val okAmp = amp >= (2.0f * thrHigh)
-                                val okRatio = vRatio >= VDOM_MIN
+                        if (stepPeriodS in W_MIN..W_MAX) {
+                            wEst = if (wEst <= 0f) {
+                                stepPeriodS
+                            } else {
+                                (1f - ALPHA_W) * wEst + ALPHA_W * stepPeriodS
+                            }
 
-                                if (okAmp && okRatio) {
+                            val cadenceTolerance = max(DELTA_MIN, DELTA_FRAC * wEst)
+
+                            if (abs(stepPeriodS - wEst) <= cadenceTolerance) {
+                                val amplitude = posPeak - negPeak
+                                val amplitudeOk = amplitude >= 2.0f * thrHigh
+                                val verticalRatioOk = vRatio >= VDOM_MIN
+
+                                if (amplitudeOk && verticalRatioOk) {
                                     accepted = true
                                     reason = "ok"
                                 } else {
-                                    reason = if (!okAmp) "amp" else "ratio"
+                                    reason = if (!amplitudeOk) "amp" else "ratio"
                                 }
                             } else {
                                 reason = "cadence"
@@ -774,39 +797,40 @@ class StepCounterZC private constructor(
                             reason = "W"
                         }
                     } else {
+                        // First candidate only establishes the cadence baseline.
                         wEst = 0f
                         reason = "prime"
                     }
 
-                    val onFoot = when (_mode.value) {
-                        MotionMode.WALKING, MotionMode.RUNNING -> true
-                        MotionMode.UNKNOWN -> accOnFootLikelyNow
-                        else -> false
-                    }
+                    val onFoot = hasOnFootContext(_mode.value)
 
-                    val antiTiltActive = nowMs < max(spinBlockUntilMs, tiltBlockUntilMs)
-                    if (antiTiltActive) {
+                    if (isAntiTiltActive(nowMs)) {
                         accepted = false
                         reason = "tilt"
                     }
 
                     if (accepted && onFoot) {
-                        val Wcur = if (lastDownS > 0f) (tNow - lastDownS) else wEst
-                        lastDownS = tNow
-                        commitStep(Wcur, posPeak, negPeak, vRatio)
+                        val currentPeriodS =
+                            if (lastDownS > 0f) currentTimeS - lastDownS else wEst
+
+                        lastDownS = currentTimeS
+                        commitStep(currentPeriodS, posPeak, negPeak, vRatio)
                     } else {
                         if (debugLogs) {
                             Log.w(
                                 TAG_DIAG,
                                 "[P2.V] reject: $reason pos=%.3f neg=%.3f W=%.3f wEst=%.3f thr=%.3f ratio=%.2f"
                                     .format(
-                                        posPeak, negPeak,
-                                        if (lastDownS > 0) tNow - lastDownS else -1f,
-                                        wEst, thrHigh, vRatio
+                                        posPeak,
+                                        negPeak,
+                                        if (lastDownS > 0) currentTimeS - lastDownS else -1f,
+                                        wEst,
+                                        thrHigh,
+                                        vRatio
                                     )
                             )
                         }
-                        lastDownS = tNow
+                        lastDownS = currentTimeS
                     }
 
                     phase = Phase.IDLE
@@ -823,7 +847,12 @@ class StepCounterZC private constructor(
     // region STEP COMMIT
     // ============================================================================
 
-    private fun commitStep(W: Float, p: Float, n: Float, ratio: Float) {
+    private fun commitStep(
+        periodS: Float,
+        positivePeak: Float,
+        negativePeak: Float,
+        verticalRatio: Float
+    ) {
         _stepCount.value += 1
 
         val nowMs = System.currentTimeMillis()
@@ -835,7 +864,7 @@ class StepCounterZC private constructor(
 
         while (stepTimesMs.size > MAX_TIMESTAMPS) stepTimesMs.removeFirst()
 
-        val cutoff = nowMs - 3L * 24L * 60L * 60L * 1000L
+        val cutoff = nowMs - STEP_HISTORY_RETENTION_MS
         while (stepTimesMs.isNotEmpty() && stepTimesMs.first() < cutoff) {
             stepTimesMs.removeFirst()
         }
@@ -844,9 +873,9 @@ class StepCounterZC private constructor(
         recentSteps.add(
             StepFeature(
                 timeMs = nowMs,
-                periodS = if (W > 0f) W else wEst,
-                vRatio = ratio,
-                amp = (p - n)
+                periodS = if (periodS > 0f) periodS else wEst,
+                vRatio = verticalRatio,
+                amp = positivePeak - negativePeak
             )
         )
 
@@ -867,44 +896,49 @@ class StepCounterZC private constructor(
             return
         }
 
-        // Calculate window statistics
-        val n = win.size
-        var sumVR = 0f
-        var sumL2 = 0f
-        var sumG2 = 0f
+        // Calculate statistics for the rolling activity window.
+        val sampleCount = win.size
+        var verticalRatioSum = 0f
+        var linearAccelerationSquaredSum = 0f
+        var gyroSquaredSum = 0f
 
-        for (s in win) {
-            sumVR += s.vRatio
-            sumL2 += s.linRms * s.linRms
-            sumG2 += s.gyro * s.gyro
+        for (sample in win) {
+            verticalRatioSum += sample.vRatio
+            linearAccelerationSquaredSum += sample.linRms * sample.linRms
+            gyroSquaredSum += sample.gyro * sample.gyro
         }
 
-        val vAvg = sumVR / n
-        val linRms = sqrt(sumL2 / n)
-        val gyroRms = sqrt(sumG2 / n)
-        val speed = latestSpeedMps
+        val averageVerticalRatio = verticalRatioSum / sampleCount
+        val linearRms = sqrt(linearAccelerationSquaredSum / sampleCount)
+        val gyroRms = sqrt(gyroSquaredSum / sampleCount)
+        val speedMps = latestSpeedMps
 
-        // Calculate steps per second over the window
+        // Steps per second in the current classification window.
         val stepRate = countStepsSince(nowMs - WIN_MS).toFloat() / (WIN_MS / 1000f)
 
-        // Update SPM
-        val spm = stepRate * 60f
-        _spm.value = spm
+        val stepsPerMinute = stepRate * 60f
+        _spm.value = stepsPerMinute
 
-        // Step evidence calculation
-        val steps4s = countStepsSince(nowMs - 4000L)
-        val lastStepFresh = stepTimesMs.isNotEmpty() && (nowMs - stepTimesMs.last() <= 1500L)
-        val hwRecent = hwStepActive && (nowMs - lastHwWallMs) <= 2_000L
-        val hasStepEvidence = (steps4s >= 3) || lastStepFresh || hwRecent
+        // Recent step evidence can come from timestamps, a fresh step, or the HW counter.
+        val stepsInLast4Seconds = countStepsSince(nowMs - 4_000L)
+        val lastStepIsFresh =
+            stepTimesMs.isNotEmpty() && (nowMs - stepTimesMs.last() <= 1_500L)
+        val hardwareStepIsFresh =
+            hwStepActive && (nowMs - lastHwWallMs) <= 2_000L
 
-        val accOnFootLikely = (vAvg >= 0.45f && linRms >= 0.80f && gyroRms <= 3.0f)
-        accOnFootLikelyNow = accOnFootLikely
-        val hasStepOrCadence = hasStepEvidence || accOnFootLikely
+        val hasStepEvidence =
+            stepsInLast4Seconds >= 3 || lastStepIsFresh || hardwareStepIsFresh
 
-        // Speed in km/h
-        val speedKmh = (speed ?: -1f) * 3.6f
+        val accelerometerSuggestsOnFoot =
+            averageVerticalRatio >= 0.45f && linearRms >= 0.80f && gyroRms <= 3.0f
 
-        // Dynamic running floor based on GPS speed
+        accOnFootLikelyNow = accelerometerSuggestsOnFoot
+        val hasStepOrCadenceEvidence = hasStepEvidence || accelerometerSuggestsOnFoot
+
+        // A missing GPS speed intentionally remains -1, exactly as before.
+        val speedKmh = (speedMps ?: -1f) * 3.6f
+
+        // Faster GPS speeds allow a slightly different running cadence floor.
         val runningFloorSpm = when {
             speedKmh >= 14f -> 145f
             speedKmh >= 12f -> 140f
@@ -912,60 +946,90 @@ class StepCounterZC private constructor(
             else -> 135f
         }
 
-        // --- Activity Detection Flags ---
+        // --- Running / Walking ---
+        val runningByCadence = stepsPerMinute >= runningFloorSpm
+        val runningBySpeedAndCadence = speedKmh >= 8f && stepsPerMinute >= 115f
+        val runningByShortStepPeriod =
+            stepsPerMinute >= 130f && wEst > 0f && wEst <= 0.55f
 
-        val runningBySteps = hasStepEvidence && (
-                spm >= runningFloorSpm ||
-                        (speedKmh >= 8f && spm >= 115f) ||
-                        (spm >= 130f && wEst > 0f && wEst <= 0.55f)
-                )
+        val runningBySteps = hasStepEvidence &&
+                (runningByCadence || runningBySpeedAndCadence || runningByShortStepPeriod)
 
-        val walkingBySteps = hasStepEvidence && !runningBySteps && spm in 40f..140f
+        val walkingBySteps =
+            hasStepEvidence && !runningBySteps && stepsPerMinute in 40f..140f
 
-        val drivingByGps = (speed ?: -1f) >= 6.94f && !hasStepEvidence
-        val drivingBySensors = (vAvg < 0.25f && stepRate < 0.2f && gyroRms < 0.35f && linRms in 0.10f..2.50f) && !hasStepEvidence
+        // --- Driving ---
+        val drivingByGps = (speedMps ?: -1f) >= 6.94f && !hasStepEvidence
 
-        val cyclingByGps = (speed ?: -1f) in 3.0f..6.8f && !hasStepOrCadence
-        val cyclingBySensors = (vAvg in 0.28f..0.55f && gyroRms in 0.60f..2.50f && stepRate < 0.25f) && !hasStepOrCadence
+        val drivingSensorPattern =
+            averageVerticalRatio < 0.25f &&
+                    stepRate < 0.2f &&
+                    gyroRms < 0.35f &&
+                    linearRms in 0.10f..2.50f
 
-        val gyroAvailable = (gyro != null)
-        val freshGyro = !gyroAvailable || lastGyroMs == 0L || (nowMs - lastGyroMs) <= 5_000L
+        val drivingBySensors = drivingSensorPattern && !hasStepEvidence
 
-        val stillBySensors = stepRate < 0.02f &&
-                linRms < 0.20f &&
-                (!gyroAvailable || gyroRms < 0.15f) &&
-                freshGyro
+        // --- Cycling ---
+        val cyclingByGps =
+            (speedMps ?: -1f) in 3.0f..6.8f && !hasStepOrCadenceEvidence
 
-        val standingBySensors = !hasStepEvidence &&
-                stepRate < 0.20f &&
-                linRms < 1f &&
-                (!gyroAvailable || gyroRms <= 1.00f) &&
-                freshGyro
+        val cyclingSensorPattern =
+            averageVerticalRatio in 0.28f..0.55f &&
+                    gyroRms in 0.60f..2.50f &&
+                    stepRate < 0.25f
 
-        // --- Compose raw guess with "steps get priority" rule ---
+        val cyclingBySensors = cyclingSensorPattern && !hasStepOrCadenceEvidence
+
+        // --- Stationary / Standing ---
+        val gyroAvailable = gyro != null
+        val gyroDataIsFresh =
+            !gyroAvailable || lastGyroMs == 0L || (nowMs - lastGyroMs) <= 5_000L
+
+        val stationaryBySensors =
+            stepRate < 0.02f &&
+                    linearRms < 0.20f &&
+                    (!gyroAvailable || gyroRms < 0.15f) &&
+                    gyroDataIsFresh
+
+        val standingStillBySensors =
+            !hasStepEvidence &&
+                    stepRate < 0.20f &&
+                    linearRms < 1f &&
+                    (!gyroAvailable || gyroRms <= 1.00f) &&
+                    gyroDataIsFresh
+
+        // Steps have priority over vehicle and stationary classifications.
         val rawGuess = when {
             hasStepEvidence && runningBySteps -> MotionMode.RUNNING
             hasStepEvidence && walkingBySteps -> MotionMode.WALKING
             drivingByGps || drivingBySensors -> MotionMode.DRIVING
             cyclingByGps || cyclingBySensors -> MotionMode.CYCLING
-            stillBySensors -> MotionMode.STATIONARY          // ← More specific, check FIRST
-            standingBySensors -> MotionMode.STANDING_STILL   // ← Less specific, check SECOND
+            stationaryBySensors -> MotionMode.STATIONARY
+            standingStillBySensors -> MotionMode.STANDING_STILL
             else -> MotionMode.UNKNOWN
         }
 
-        // Apply hysteresis
+        val vehicleLikely =
+            drivingByGps || drivingBySensors || cyclingByGps || cyclingBySensors
+
         applyModeWithHysteresis(
-            nowMs,
-            rawGuess,
-            hasStepEvidence,
-            (drivingByGps || drivingBySensors || cyclingByGps || cyclingBySensors)
+            nowMs = nowMs,
+            rawGuess = rawGuess,
+            hasStepEvidence = hasStepEvidence,
+            vehicleLikely = vehicleLikely
         )
 
         if (debugLogs) {
             Log.i(
                 TAG_DIAG,
                 "[MODE?] raw=$rawGuess vAvg=%.2f linRms=%.2f gyroRms=%.2f stepRate=%.2f speed=%s"
-                    .format(vAvg, linRms, gyroRms, stepRate, speed?.toString() ?: "n/a")
+                    .format(
+                        averageVerticalRatio,
+                        linearRms,
+                        gyroRms,
+                        stepRate,
+                        speedMps?.toString() ?: "n/a"
+                    )
             )
         }
     }
@@ -995,12 +1059,12 @@ class StepCounterZC private constructor(
         val speedKmh = (latestSpeedMps ?: -1f) * 3.6f
 
         // Immediate on-foot if we have step evidence
-        if ((target == MotionMode.WALKING || target == MotionMode.RUNNING) && hasStepEvidence) {
+        if (isOnFootMode(target) && hasStepEvidence) {
             return 0L
         }
 
         // Immediate vehicle if clearly fast and no steps now
-        if ((target == MotionMode.DRIVING || target == MotionMode.CYCLING) &&
+        if (isVehicleMode(target) &&
             !hasStepEvidence && (speedKmh >= 25f || (vehicleLikely && speedKmh >= 15f))
         ) {
             return 0L
@@ -1045,30 +1109,32 @@ class StepCounterZC private constructor(
         val current = _mode.value
         val speedKmh = (latestSpeedMps ?: 0f) * 3.6f
 
-        // If currently in a vehicle mode, be conservative about leaving it
-        if ((current == MotionMode.DRIVING || current == MotionMode.CYCLING) &&
-            (rawGuess == MotionMode.WALKING ||
+        // If currently in a vehicle mode, be conservative about leaving it.
+        val leavingVehicleForNonVehicleMode =
+            rawGuess == MotionMode.WALKING ||
                     rawGuess == MotionMode.RUNNING ||
                     rawGuess == MotionMode.STANDING_STILL ||
                     rawGuess == MotionMode.STATIONARY ||
-                    rawGuess == MotionMode.UNKNOWN)
-        ) {
+                    rawGuess == MotionMode.UNKNOWN
+
+        if (isVehicleMode(current) && leavingVehicleForNonVehicleMode) {
             val vehicleBandMinKmh = 11f
             if (speedKmh >= vehicleBandMinKmh) return
         }
 
-        // While currently on-foot, don't drop to vehicle/unknown if steps are still coming
-        if ((current == MotionMode.WALKING || current == MotionMode.RUNNING) &&
-            (rawGuess == MotionMode.CYCLING || rawGuess == MotionMode.DRIVING ||
-                    rawGuess == MotionMode.UNKNOWN || rawGuess == MotionMode.STATIONARY)
-        ) {
+        // While currently on-foot, don't drop to vehicle/unknown if steps are still coming.
+        val leavingOnFootForBlockedMode =
+            rawGuess == MotionMode.CYCLING ||
+                    rawGuess == MotionMode.DRIVING ||
+                    rawGuess == MotionMode.UNKNOWN ||
+                    rawGuess == MotionMode.STATIONARY
+
+        if (isOnFootMode(current) && leavingOnFootForBlockedMode) {
             if (hasStepEvidence && speedKmh < 25f) return
         }
 
-        // To enter a vehicle mode, require either: no step evidence or clear GPS speed
-        if ((rawGuess == MotionMode.DRIVING || rawGuess == MotionMode.CYCLING) &&
-            hasStepEvidence && speedKmh < 25f
-        ) {
+        // To enter a vehicle mode, require either no step evidence or clear GPS speed.
+        if (isVehicleMode(rawGuess) && hasStepEvidence && speedKmh < 25f) {
             return
         }
 
@@ -1121,12 +1187,18 @@ class StepCounterZC private constructor(
                 (nowMs - lastTsPersistWallMs) >= TS_PERSIST_PERIOD_MS ||
                 (stepsNow - lastTsPersistCount) >= TS_PERSIST_EVERY_STEPS
 
+        val timestampsToPersist = if (shouldPersistTs) stepTimesMs else null
+
+        store.saveSnapshot(
+            totalSteps = stepsNow,
+            recent = recent,
+            timestamps = timestampsToPersist,
+            nowMs = nowMs
+        )
+
         if (shouldPersistTs) {
-            store.saveSnapshot(totalSteps = stepsNow, recent = recent, timestamps = stepTimesMs, nowMs = nowMs)
             lastTsPersistWallMs = nowMs
             lastTsPersistCount = stepsNow
-        } else {
-            store.saveSnapshot(totalSteps = stepsNow, recent = recent, timestamps = null, nowMs = nowMs)
         }
     }
 
@@ -1138,7 +1210,7 @@ class StepCounterZC private constructor(
         for (t in store.loadStepTimestamps()) stepTimesMs.add(t)
 
         // Prune anything older than 3 days
-        val cutoff = now - 3L * 24L * 60L * 60L * 1000L
+        val cutoff = now - STEP_HISTORY_RETENTION_MS
         while (stepTimesMs.isNotEmpty() && stepTimesMs.first() < cutoff) stepTimesMs.removeFirst()
         while (stepTimesMs.size > MAX_TIMESTAMPS) stepTimesMs.removeFirst()
 
