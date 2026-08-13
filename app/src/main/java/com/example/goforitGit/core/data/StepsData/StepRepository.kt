@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.asLiveData
 import androidx.lifecycle.liveData
+import com.example.goforitGit.core.util.FourHourBuckets.FourHourBucketsSinceBoot
 import com.example.goforitGit.core.util.StepsUtils.StepCounterZC
 import java.util.Calendar
 import kotlin.math.roundToInt
@@ -14,7 +15,7 @@ import kotlin.math.roundToInt
  * Provides lifecycle-aware LiveData streams for UI consumption
  * and utility methods for step calculations.
  *
- * Over view of the Data flow: Service → StepBus → Repository → UI
+ * Overview of the Data flow: Service → StepBus → Repository → UI
  */
 class StepRepository private constructor(app: Application) {
 
@@ -40,6 +41,7 @@ class StepRepository private constructor(app: Application) {
     // ============================================================================
 
     private val store = StepHistoryStore(app)
+    private val buckets = FourHourBucketsSinceBoot(app)
 
     // endregion
 
@@ -89,7 +91,14 @@ class StepRepository private constructor(app: Application) {
      */
     val stepsTodayLD: LiveData<Int> = liveData {
         StepBus.steps.collect {
-            emit(stepsToday())
+            val todayKey = buckets.getTodayKey()
+
+            val todaySteps =
+                buckets.getBucketsForDay(todayKey)
+                    ?.sum()
+                    ?: 0
+
+            emit(todaySteps)
         }
     }
 
@@ -145,6 +154,7 @@ class StepRepository private constructor(app: Application) {
     // ============================================================================
 
     /** Calculates steps taken since midnight today */
+    /*
     private fun stepsToday(): Int {
         val times = store.loadStepTimestamps()
 
@@ -157,6 +167,7 @@ class StepRepository private constructor(app: Application) {
 
         return times.count { it >= startOfDay }
     }
+    */
 
     // endregion
 }

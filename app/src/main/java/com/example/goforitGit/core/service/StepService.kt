@@ -226,10 +226,11 @@ class StepService : Service() {
 
         scope.launch {
             stepper.stepsFlow.collectLatest { totalSteps ->
-                StepBus.steps.value = totalSteps
-
                 // FourHour bucket attribution — unchanged.
                 buckets.update(totalSteps)
+
+                // Notify UI only after the buckets contain the latest step count.
+                StepBus.steps.value = totalSteps
 
                 updateNotificationForStepEvent(totalSteps)
 
